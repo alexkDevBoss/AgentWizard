@@ -1,0 +1,3 @@
+# AWS CDK v2 (Python). Used by `cdk synth|diff|deploy`, never uploaded.
+aws-cdk-lib==2.266.0
+constructs==10.8.1

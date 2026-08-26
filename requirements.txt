@@ -1,0 +1,10 @@
+# Backend runtime dependencies.
+# THIS FILE IS WHAT CDK BUNDLES INTO THE LAMBDA ZIPS. Keep it lean.
+#
+# boto3/botocore are provided by the python3.12 Lambda runtime and are
+# deliberately NOT listed here (they would add ~20MB to every bundle).
+# They are pinned in requirements-dev.txt for local parity. If we ever need a
+# boto3 newer than the runtime's, move the pin here and accept the size.
+
+PyYAML==6.0.3
+tzdata==2026.3

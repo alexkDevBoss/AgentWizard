@@ -1,0 +1,7 @@
+# Local development, tests, linting, type stubs. Never uploaded.
+boto3==1.43.80
+botocore==1.43.80
+boto3-stubs[bedrock-runtime,dynamodb,ecs,events,lambda,s3,scheduler,secretsmanager,ses,sesv2,stepfunctions]==1.43.80
+moto[dynamodb,secretsmanager,stepfunctions]==5.2.3
+pytest==9.1.1
+ruff==0.16.4

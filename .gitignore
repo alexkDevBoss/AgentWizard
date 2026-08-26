@@ -1,0 +1,32 @@
+# --- python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- secrets / local config ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- cdk ---
+cdk.out/
+.cdk.staging/
+cdk.context.json
+
+# --- node / admin panel ---
+node_modules/
+admin/dist/
+*.log
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

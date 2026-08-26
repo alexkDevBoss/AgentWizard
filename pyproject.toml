@@ -1,0 +1,18 @@
+# Tooling config only. There is no installable package here -- /backend is
+# zipped by CDK, /infra is executed by the CDK CLI.
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+exclude = [".venv", "cdk.out", "admin", "node_modules", "voice/.venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"infra/app.py" = ["E402"]  # sys.path bootstrap must run before cdk imports
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
