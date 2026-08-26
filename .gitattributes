@@ -1,0 +1,17 @@
+# Normalise line endings in the repo. Text files are stored as LF.
+* text=auto
+
+# These MUST be LF in the working tree, not just in the index. GNU Make and
+# sh pass a trailing CR straight through to the shell, so a CRLF checkout on
+# Windows breaks every recipe line and every script.
+Makefile      text eol=lf
+*.mk          text eol=lf
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+.python-version text eol=lf
+
+# Binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.ico binary
