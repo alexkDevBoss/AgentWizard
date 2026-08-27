@@ -1,0 +1,8 @@
+{
+  "apiBaseUrl": "http://localhost:3000",
+  "userPoolId": "",
+  "clientId": "",
+  "loginDomain": "",
+  "region": "us-east-1",
+  "env": "local"
+}

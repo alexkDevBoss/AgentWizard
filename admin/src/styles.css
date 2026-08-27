@@ -1,0 +1,787 @@
+/*
+ * The handler's desk.
+ *
+ * Cold console chrome around warm fictional matter. Everything the *system*
+ * says is mono or sans in cool grey; everything the *player* saw or said is
+ * serif on a warm paper tone. That single contrast makes the operator's core
+ * discrimination -- fiction versus system -- a glance rather than a read.
+ */
+
+:root {
+  --ink: #0f1319; /* the desk surface: blued charcoal, not black */
+  --slate: #171d26; /* raised panels */
+  --slate-hi: #1e2632; /* hover, selected */
+  --rule: #2a323d; /* hairlines and the spine */
+  --rule-soft: #212832;
+  --chalk: #c7ced9; /* primary console text */
+  --chalk-dim: #7d8798; /* secondary */
+  --chalk-faint: #4d5666; /* tertiary, timestamps at rest */
+  --paper: #e9e2d4; /* in-fiction text only */
+
+  --live: #5bc8a5; /* active */
+  --hold: #e0a458; /* paused, quiet hours, rate limited */
+  --halt: #d96a6a; /* stopped */
+  --flag: #c77dd6; /* needs a human -- deliberately not the error red */
+  --pending: #6e93c4; /* enrolled, not yet started */
+
+  --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+
+  --rail: 268px;
+  --gutter: 62px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--ink);
+  color: var(--chalk);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--flag);
+  outline-offset: 2px;
+}
+
+/* ─────────────────────────────────────────────── shell */
+
+.desk {
+  display: grid;
+  grid-template-rows: 38px 1fr;
+  grid-template-columns: var(--rail) 1fr;
+  grid-template-areas: "bar bar" "rail main";
+  height: 100%;
+}
+
+.bar {
+  grid-area: bar;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--slate);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--chalk-dim);
+}
+
+.bar__mark {
+  color: var(--chalk);
+  font-weight: 600;
+  letter-spacing: 0.22em;
+}
+
+.bar__env {
+  color: var(--hold);
+  border: 1px solid currentColor;
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+}
+
+.bar__spacer {
+  flex: 1;
+}
+
+.bar__link {
+  color: var(--chalk-dim);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.bar__link:hover {
+  color: var(--chalk);
+}
+
+/* ─────────────────────────────────────────────── roster */
+
+.rail {
+  grid-area: rail;
+  border-right: 1px solid var(--rule);
+  background: var(--slate);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.rail__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.rail__add {
+  color: var(--chalk-dim);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 2px 7px;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.rail__add:hover {
+  color: var(--chalk);
+  border-color: var(--chalk-faint);
+}
+
+.rail__empty {
+  padding: 24px 14px;
+  color: var(--chalk-faint);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* A strip, not a card: full-bleed rows divided by hairlines, with the status
+   carried on the leading edge so a column of them reads as one instrument. */
+.strip {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px 9px 14px;
+  border-bottom: 1px solid var(--rule-soft);
+  border-left: 3px solid transparent;
+  position: relative;
+}
+
+.strip:hover {
+  background: var(--slate-hi);
+}
+
+.strip[aria-current="true"] {
+  background: var(--slate-hi);
+  border-left-color: var(--chalk);
+}
+
+.strip--active {
+  border-left-color: var(--live);
+}
+.strip--paused {
+  border-left-color: var(--hold);
+}
+.strip--stopped {
+  border-left-color: var(--halt);
+}
+.strip--pending {
+  border-left-color: var(--pending);
+}
+
+.strip__top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.strip__name {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--chalk);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strip__since {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--chalk-faint);
+}
+
+.strip__since--stale {
+  color: var(--hold);
+}
+
+.strip__bottom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.strip__flag {
+  color: var(--flag);
+  letter-spacing: 0.04em;
+}
+
+/* Six segments, one per allowed message. Reading the day's budget should not
+   require reading a number. */
+.quota {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.quota__cell {
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--chalk-faint);
+}
+
+.quota__cell--used {
+  background: var(--chalk-faint);
+}
+
+.quota__cell--last {
+  border-color: var(--hold);
+  background: var(--hold);
+}
+
+/* ─────────────────────────────────────────────── main */
+
+.main {
+  grid-area: main;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--chalk-faint);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ─────────────────────────────────────────────── player header */
+
+.head {
+  border-bottom: 1px solid var(--rule);
+  padding: 12px 18px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.head__name {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.head__facts {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--chalk-faint);
+}
+
+.head__facts b {
+  color: var(--chalk-dim);
+  font-weight: 500;
+}
+
+.head__actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.act {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--chalk-dim);
+}
+.act:hover:not(:disabled) {
+  color: var(--chalk);
+  border-color: var(--chalk-faint);
+  background: var(--slate-hi);
+}
+.act:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.act--halt:hover:not(:disabled) {
+  color: var(--halt);
+  border-color: var(--halt);
+}
+.act--danger {
+  color: var(--halt);
+  border-color: transparent;
+}
+.act--danger:hover:not(:disabled) {
+  border-color: var(--halt);
+}
+
+.pill {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+}
+.pill--ACTIVE {
+  color: var(--live);
+}
+.pill--PAUSED {
+  color: var(--hold);
+}
+.pill--STOPPED {
+  color: var(--halt);
+}
+.pill--PENDING {
+  color: var(--pending);
+}
+
+.code {
+  font-family: var(--mono);
+  color: var(--pending);
+}
+
+/* ─────────────────────────────────────────────── the spine */
+
+.spine {
+  overflow-y: auto;
+  padding: 14px 18px 24px;
+  min-height: 0;
+}
+
+.daymark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+.daymark::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.ev {
+  display: grid;
+  grid-template-columns: var(--gutter) 1fr;
+  column-gap: 14px;
+  position: relative;
+}
+
+/* The continuous vertical rule every event hangs from. */
+.ev::before {
+  content: "";
+  position: absolute;
+  left: var(--gutter);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--rule);
+}
+
+.ev__time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--chalk-faint);
+  text-align: right;
+  padding-top: 3px;
+  white-space: nowrap;
+}
+
+.ev__body {
+  padding: 2px 0 10px 16px;
+  min-width: 0;
+}
+
+.ev__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+  margin-bottom: 2px;
+}
+
+.ev__dir {
+  font-weight: 600;
+}
+.ev--in .ev__dir {
+  color: var(--pending);
+}
+.ev--out .ev__dir {
+  color: var(--live);
+}
+
+/* Fiction is typeset. System chatter is not. */
+.ev__said {
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--paper);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.ev__system {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--chalk-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.ev__note {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--hold);
+  border-left: 2px solid var(--hold);
+  padding-left: 10px;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* What the player did *not* receive, and why. */
+.ev--blocked .ev__said {
+  color: var(--chalk-faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--halt);
+  text-decoration-thickness: 1px;
+}
+
+.tag {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 2px;
+  border: 1px solid currentColor;
+}
+.tag--blocked {
+  color: var(--halt);
+}
+.tag--flag {
+  color: var(--flag);
+}
+.tag--sub {
+  color: var(--hold);
+}
+
+/* The signature: silence takes up room, and the night is drawn. */
+.gap {
+  display: grid;
+  grid-template-columns: var(--gutter) 1fr;
+  column-gap: 14px;
+  position: relative;
+}
+
+.gap::before {
+  content: "";
+  position: absolute;
+  left: var(--gutter);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--rule);
+}
+
+.gap__label {
+  grid-column: 2;
+  align-self: center;
+  padding-left: 16px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.gap--night {
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent 0 6px,
+    rgba(110, 147, 196, 0.07) 6px 12px
+  );
+}
+
+.gap--night .gap__label {
+  color: var(--pending);
+}
+
+/* ─────────────────────────────────────────────── composer */
+
+.composer {
+  border-top: 1px solid var(--rule);
+  background: var(--slate);
+  padding: 10px 18px 12px;
+}
+
+.composer__mode {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.composer__tab {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 2px;
+  color: var(--chalk-faint);
+  border: 1px solid transparent;
+}
+.composer__tab[aria-pressed="true"] {
+  color: var(--chalk);
+  border-color: var(--rule);
+  background: var(--ink);
+}
+
+.composer__row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.composer__input {
+  flex: 1;
+  resize: none;
+  background: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--paper);
+  font-family: var(--serif);
+  font-size: 15px;
+  line-height: 1.5;
+  padding: 9px 11px;
+  min-height: 62px;
+  max-height: 200px;
+}
+.composer__input--note {
+  font-family: var(--sans);
+  font-size: 13.5px;
+  color: var(--hold);
+}
+.composer__input:focus {
+  border-color: var(--chalk-faint);
+  outline: none;
+}
+.composer__input::placeholder {
+  color: var(--chalk-faint);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+.composer__send {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 9px 16px;
+  border-radius: 3px;
+  background: var(--chalk);
+  color: var(--ink);
+  font-weight: 600;
+}
+.composer__send:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.composer__hint {
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--chalk-faint);
+  min-height: 15px;
+}
+.composer__hint--refused {
+  color: var(--hold);
+}
+
+/* ─────────────────────────────────────────────── overlays */
+
+.veil {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 10;
+}
+
+.sheet {
+  background: var(--slate);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 20px;
+  width: min(420px, 100%);
+}
+
+.sheet h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.field span {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+  margin-bottom: 4px;
+}
+
+.field input,
+.field select {
+  width: 100%;
+  background: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--chalk);
+  font-family: var(--sans);
+  font-size: 14px;
+  padding: 7px 9px;
+}
+.field input:focus,
+.field select:focus {
+  border-color: var(--chalk-faint);
+  outline: none;
+}
+
+.sheet__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.gate {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  text-align: center;
+  padding: 24px;
+}
+
+.gate__mark {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+  color: var(--chalk-faint);
+}
+
+.gate__title {
+  font-family: var(--serif);
+  font-size: 30px;
+  font-weight: 400;
+  color: var(--paper);
+  margin: 0;
+  max-width: 22ch;
+  line-height: 1.25;
+}
+
+.gate__error {
+  color: var(--halt);
+  font-family: var(--mono);
+  font-size: 12px;
+  max-width: 48ch;
+}
+
+.banner {
+  background: rgba(217, 106, 106, 0.12);
+  border-bottom: 1px solid var(--halt);
+  color: var(--halt);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  padding: 7px 18px;
+}
+
+@media (max-width: 860px) {
+  .desk {
+    grid-template-columns: 1fr;
+    grid-template-areas: "bar" "rail" "main";
+    grid-template-rows: 38px auto 1fr;
+  }
+  .rail {
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
+  :root {
+    --gutter: 48px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

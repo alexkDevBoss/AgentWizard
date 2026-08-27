@@ -23,6 +23,8 @@ cdk.context.json
 # --- node / admin panel ---
 node_modules/
 admin/dist/
+# Generated from stack outputs by scripts/admin_deploy.py.
+admin/public/config.json
 *.log
 
 # --- os / editor ---

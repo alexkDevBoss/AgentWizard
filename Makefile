@@ -13,6 +13,9 @@
 #   make deploy           cdk deploy       [ENV=dev|prod]  -- ASKS FIRST
 #   make destroy          cdk destroy      [ENV=dev|prod]
 #   make bootstrap        cdk bootstrap (once per account/region)
+#   make admin-config     write admin/public/config.json from stack outputs
+#   make admin-dev        run the operator console locally against dev
+#   make admin-deploy     build the console and publish it to CloudFront
 #   make clean            remove build artefacts (keeps .venv)
 
 ENV     ?= dev
@@ -42,10 +45,12 @@ CDK_APP := --app "$(PY_APP) infra/app.py"
 STACK   := AdventureAgent$(if $(filter prod,$(ENV)),Prod,Dev)
 CDK     := cdk $(CDK_APP) --context env=$(ENV)
 
-.PHONY: help setup test lint fmt synth diff deploy destroy bootstrap clean venv-check
+.PHONY: help setup test lint fmt synth diff deploy destroy bootstrap clean venv-check admin-config admin-dev admin-deploy
 
 help:
-	@echo "targets: setup test lint fmt synth diff deploy destroy bootstrap clean   (ENV=dev|prod)"
+	@echo "build:  setup test lint fmt"
+	@echo "infra:  synth diff deploy destroy bootstrap    (ENV=dev|prod)"
+	@echo "console: admin-config admin-dev admin-deploy"
 
 setup:
 	$(MKVENV)
@@ -84,6 +89,15 @@ destroy: venv-check
 
 bootstrap: venv-check
 	$(CDK) bootstrap
+
+admin-config: venv-check
+	$(PY) scripts/admin_deploy.py --env $(ENV) config
+
+admin-dev: admin-config
+	cd admin && npm install && npm run dev
+
+admin-deploy: venv-check
+	$(PY) scripts/admin_deploy.py --env $(ENV) deploy
 
 clean:
 	@$(PY) -c "import shutil;[shutil.rmtree(d,ignore_errors=True) for d in ('cdk.out','.pytest_cache','.ruff_cache')];print('cleaned')"

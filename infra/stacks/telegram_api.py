@@ -1,14 +1,17 @@
-"""Telegram webhook: HTTP API -> Lambda.
+"""The Telegram webhook route and its Lambda.
 
-One route, one function. The function is the only thing in Phase 1 that talks
-to a player, so it is also where the cost guardrails sit: the stage is
-throttled well below anything ten players could generate, and the account's
-own Lambda concurrency cap bounds the rest (see RESERVED_CONCURRENCY).
+The HTTP API itself is owned by the stack, not by this construct: the admin
+console already hangs off the same API, and email (Phase 5) and the voice
+bridge (Phase 6) will too. This construct adds one route to it.
+
+That route is deliberately *not* behind the API's JWT authorizer. Telegram
+cannot present a Cognito token; it authenticates with a secret header the
+handler verifies in constant time against Secrets Manager.
 """
 
 from __future__ import annotations
 
-from aws_cdk import CfnOutput, Duration, RemovalPolicy
+from aws_cdk import Duration, RemovalPolicy
 from aws_cdk import aws_apigatewayv2 as apigw
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_lambda as lambda_
@@ -21,12 +24,6 @@ from infra.bundling import build_lambda_asset
 from infra.config import EnvConfig
 
 WEBHOOK_PATH = "/telegram/webhook"
-
-# Ten players cannot generate more than a trickle. Anything above this is
-# either a bug or someone hammering the endpoint, and neither should be able
-# to run up a bill.
-STAGE_RATE_LIMIT = 20
-STAGE_BURST_LIMIT = 10
 
 #: Per-function reserved concurrency, or None to leave it unset.
 #:
@@ -46,6 +43,7 @@ class TelegramApi(Construct):
         construct_id: str,
         *,
         cfg: EnvConfig,
+        api: apigw.HttpApi,
         table: dynamodb.TableV2,
         secret: secretsmanager.Secret,
         operator_name: str,
@@ -94,33 +92,8 @@ class TelegramApi(Construct):
         table.grant_read_write_data(self.function)
         secret.grant_read(self.function)
 
-        self.api = apigw.HttpApi(
-            self,
-            "HttpApi",
-            api_name=f"{cfg.prefix}-api",
-            description=f"Adventure Agent inbound webhooks ({cfg.name})",
-        )
-        self.api.add_routes(
+        api.add_routes(
             path=WEBHOOK_PATH,
             methods=[apigw.HttpMethod.POST],
             integration=HttpLambdaIntegration("WebhookIntegration", self.function),
-        )
-
-        self._throttle_default_stage()
-
-        CfnOutput(
-            scope,
-            "TelegramWebhookUrl",
-            value=f"{self.api.api_endpoint}{WEBHOOK_PATH}",
-            description="Register this with setWebhook (scripts/telegram_setup.py)",
-        )
-
-    def _throttle_default_stage(self) -> None:
-        """HttpApi exposes no throttle prop, so reach through to the L1 stage."""
-        stage = self.api.default_stage
-        assert stage is not None
-        cfn_stage: apigw.CfnStage = stage.node.default_child  # type: ignore[assignment]
-        cfn_stage.default_route_settings = apigw.CfnStage.RouteSettingsProperty(
-            throttling_rate_limit=STAGE_RATE_LIMIT,
-            throttling_burst_limit=STAGE_BURST_LIMIT,
         )
