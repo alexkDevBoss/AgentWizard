@@ -387,9 +387,13 @@ button {
   overflow-y: auto;
   padding: 14px 18px 24px;
   min-height: 0;
+  /* The spine is a column, not a canvas. On a wide monitor an uncapped row
+     stretches message text to twice a readable measure. */
+  --column: min(1040px, 100%);
 }
 
 .daymark {
+  max-width: var(--column);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -408,6 +412,7 @@ button {
 }
 
 .ev {
+  max-width: var(--column);
   display: grid;
   grid-template-columns: var(--gutter) 1fr;
   column-gap: 14px;
@@ -470,6 +475,7 @@ button {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 0;
+  max-width: 68ch;
 }
 
 .ev__system {
@@ -480,6 +486,7 @@ button {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   margin: 0;
+  max-width: 84ch;
 }
 
 .ev__note {
@@ -521,6 +528,7 @@ button {
 
 /* The signature: silence takes up room, and the night is drawn. */
 .gap {
+  max-width: var(--column);
   display: grid;
   grid-template-columns: var(--gutter) 1fr;
   column-gap: 14px;
@@ -569,6 +577,7 @@ button {
 }
 
 .composer__mode {
+  max-width: 1040px;
   display: flex;
   gap: 4px;
   margin-bottom: 8px;
@@ -591,6 +600,7 @@ button {
 }
 
 .composer__row {
+  max-width: 1040px;
   display: flex;
   gap: 10px;
   align-items: flex-end;
