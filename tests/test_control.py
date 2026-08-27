@@ -160,3 +160,40 @@ def test_pause_after_stop_is_refused(player, telegram, frozen) -> None:
     control.pause(player)
     assert store.get_player(player.player_id).status is PlayerStatus.STOPPED
     assert telegram.last == safety.ALREADY_STOPPED
+
+
+# ------------------------------------------------------------ timeline hygiene
+
+
+def test_a_player_stop_is_not_double_recorded(player, telegram, frozen) -> None:
+    """The webhook already logged what they typed; a second row would misreport it."""
+    from backend.core.models import Channel, Direction, EventKind
+
+    frozen(DAYTIME)
+    store.record_event(
+        player.player_id,
+        direction=Direction.IN,
+        channel=Channel.TELEGRAM,
+        kind=EventKind.COMMAND,
+        text="please stop",
+        source="player",
+    )
+    control.stop(player)
+
+    commands = [e for e in store.timeline(player.player_id) if e["kind"] == "command"]
+    assert [e["text"] for e in commands] == ["please stop"]
+
+
+def test_an_operator_stop_is_recorded_as_an_admin_action(
+    player, telegram, frozen
+) -> None:
+    """Nothing else logs it, so this path must."""
+    frozen(DAYTIME)
+    control.stop(player, reason="operator call", source="admin")
+
+    commands = [e for e in store.timeline(player.player_id) if e["kind"] == "command"]
+    assert len(commands) == 1
+    assert commands[0]["text"] == "STOP"
+    assert commands[0]["channel"] == "admin"
+    assert commands[0]["direction"] == "out"
+    assert commands[0]["reason"] == "operator call"

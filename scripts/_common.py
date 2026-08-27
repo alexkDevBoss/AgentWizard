@@ -17,6 +17,19 @@ if str(REPO_ROOT) not in sys.path:
 PROJECT = "adventure-agent"
 
 
+def force_utf8_output() -> None:
+    """Print story prose without mangling it.
+
+    Windows consoles default to a legacy code page, which turns em-dashes and
+    curly quotes into replacement characters. The operator reads real narrative
+    text through these scripts all week, so the console has to handle it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def load_env_local() -> None:
     path = REPO_ROOT / ".env.local"
     if not path.exists():
@@ -35,6 +48,7 @@ def bootstrap(env_name: str | None = None) -> str:
     Names are derived, not looked up: they follow the same convention as
     ``infra/config.py``, so this works before the stack outputs are to hand.
     """
+    force_utf8_output()
     load_env_local()
     name = env_name or os.environ.get("ADVENTURE_ENV", "dev")
 

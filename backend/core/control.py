@@ -64,15 +64,19 @@ def stop(
     logs.warn(
         "control.stopped", player_id=player.player_id, reason=reason, source=source
     )
-    store.record_event(
-        player.player_id,
-        direction=Direction.IN if source == "player" else Direction.OUT,
-        channel=Channel.TELEGRAM if source == "player" else Channel.ADMIN,
-        kind=EventKind.COMMAND,
-        text="STOP",
-        reason=reason,
-        source=source,
-    )
+    # Only the operator path records the command. A player-initiated one is
+    # already on the timeline as the inbound message they actually typed --
+    # recording a second row saying "STOP" would misreport their words.
+    if source != "player":
+        store.record_event(
+            player.player_id,
+            direction=Direction.OUT,
+            channel=Channel.ADMIN,
+            kind=EventKind.COMMAND,
+            text="STOP",
+            reason=reason,
+            source=source,
+        )
 
     return dispatch.send_to_player(
         player,
@@ -91,14 +95,18 @@ def pause(player: Player, *, source: str = "player") -> SendResult:
     store.update_player_status(player.player_id, PlayerStatus.PAUSED)
     player.status = PlayerStatus.PAUSED
     logs.info("control.paused", player_id=player.player_id, source=source)
-    store.record_event(
-        player.player_id,
-        direction=Direction.IN if source == "player" else Direction.OUT,
-        channel=Channel.TELEGRAM if source == "player" else Channel.ADMIN,
-        kind=EventKind.COMMAND,
-        text="PAUSE",
-        source=source,
-    )
+    # Only the operator path records the command. A player-initiated one is
+    # already on the timeline as the inbound message they actually typed --
+    # recording a second row saying "STOP" would misreport their words.
+    if source != "player":
+        store.record_event(
+            player.player_id,
+            direction=Direction.OUT,
+            channel=Channel.ADMIN,
+            kind=EventKind.COMMAND,
+            text="PAUSE",
+            source=source,
+        )
     return dispatch.send_to_player(
         player, safety.PAUSE_CONFIRMATION, kind=MessageKind.SYSTEM_REPLY, source=source
     )
@@ -124,14 +132,18 @@ def resume(player: Player, *, source: str = "player") -> SendResult:
     store.update_player_status(player.player_id, PlayerStatus.ACTIVE)
     player.status = PlayerStatus.ACTIVE
     logs.info("control.resumed", player_id=player.player_id, source=source)
-    store.record_event(
-        player.player_id,
-        direction=Direction.IN if source == "player" else Direction.OUT,
-        channel=Channel.TELEGRAM if source == "player" else Channel.ADMIN,
-        kind=EventKind.COMMAND,
-        text="RESUME",
-        source=source,
-    )
+    # Only the operator path records the command. A player-initiated one is
+    # already on the timeline as the inbound message they actually typed --
+    # recording a second row saying "STOP" would misreport their words.
+    if source != "player":
+        store.record_event(
+            player.player_id,
+            direction=Direction.OUT,
+            channel=Channel.ADMIN,
+            kind=EventKind.COMMAND,
+            text="RESUME",
+            source=source,
+        )
     return dispatch.send_to_player(
         player, safety.RESUME_CONFIRMATION, kind=MessageKind.SYSTEM_REPLY, source=source
     )
