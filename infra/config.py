@@ -8,6 +8,7 @@ committed.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 
 PROJECT = "adventure-agent"
@@ -88,3 +89,27 @@ def budget_alert_email() -> str:
             "(.env.local is git-ignored)."
         )
     return email
+
+
+def operator_name() -> str:
+    """Who the player is told is running this, in `/real` and STOP replies.
+
+    Never hard-coded: naming a real person or organisation in the repo is
+    exactly what the spec forbids. Falls back to a generic phrase with a loud
+    synth-time warning, because `/real` naming a placeholder in front of a real
+    player would be a safety failure.
+    """
+    name = os.environ.get("ADVENTURE_OPERATOR_NAME", "").strip()
+    if not name:
+        print(
+            "WARNING: ADVENTURE_OPERATOR_NAME is unset -- /real will say "
+            '"the operator". Set it in .env.local before enrolling anyone.',
+            file=sys.stderr,
+        )
+        return "the operator"
+    return name
+
+
+def operator_contact() -> str:
+    """How a player reaches a human. Optional, but strongly recommended."""
+    return os.environ.get("ADVENTURE_OPERATOR_CONTACT", "").strip()

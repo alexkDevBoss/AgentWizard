@@ -18,6 +18,11 @@
 ENV     ?= dev
 REGION  ?= us-east-1
 
+# CDK prompts before applying IAM changes. That prompt needs a TTY, so a
+# non-interactive caller must opt out explicitly:  make deploy APPROVAL=never
+# Interactive runs keep the prompt, which is the point of leaving it default.
+APPROVAL ?= broadening
+
 ifeq ($(OS),Windows_NT)
   VENV_BIN  := .venv/Scripts
   PY        := $(VENV_BIN)/python.exe
@@ -72,7 +77,7 @@ diff: venv-check
 # Deploy is never silent: it prints the target first and requires confirmation.
 deploy: venv-check
 	@echo "About to deploy $(STACK) to $(REGION). Ctrl-C to abort."
-	$(CDK) deploy $(STACK)
+	$(CDK) deploy $(STACK) --require-approval $(APPROVAL)
 
 destroy: venv-check
 	$(CDK) destroy $(STACK)

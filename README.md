@@ -148,6 +148,109 @@ aws secretsmanager put-secret-value --secret-id adventure-agent/dev \
 
 ---
 
+## Phase 1 resources
+
+On top of Phase 0:
+
+**`AWS::ApiGatewayV2::Api`** — one route, `POST /telegram/webhook`. The default
+stage is throttled to 20 req/s (burst 10). Ten players cannot generate more
+than a trickle; anything above that is a bug or someone hammering the endpoint,
+and neither should be able to run up a bill.
+
+**`AWS::Lambda::Function`** — `adventure-agent-{env}-telegram-webhook`, Python
+3.12, 512 MB, 30s timeout, **reserved concurrency 10**. Its log group is a real
+resource with one-week retention in dev.
+
+The Lambda bundle is built by `infra/bundling.py` without Docker: pip installs
+`requirements.txt` with `--platform manylinux2014_x86_64 --only-binary=:all:
+--python-version 3.12`, so a Windows machine still produces Linux wheels.
+Verify with `ls .build/backend-deps/yaml/` — you should see
+`_yaml.cpython-312-x86_64-linux-gnu.so` and no `.pyd`.
+
+---
+
+## Wiring up the bot
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
+2. Put it in the secret (the file is deleted immediately after):
+
+   ```bash
+   aws secretsmanager get-secret-value --secret-id adventure-agent/dev --query SecretString --output text > s.json
+   # edit s.json, fill in telegram_bot_token
+   aws secretsmanager put-secret-value --secret-id adventure-agent/dev --secret-string file://s.json
+   rm s.json
+   ```
+
+3. Set `ADVENTURE_OPERATOR_NAME` in `.env.local` and redeploy. **This is not
+   cosmetic** — it is what `/real` tells a player when they ask who is running
+   this, and a placeholder there is a safety failure.
+4. Register the webhook:
+
+   ```bash
+   .venv/Scripts/python.exe scripts/telegram_setup.py whoami
+   .venv/Scripts/python.exe scripts/telegram_setup.py set     # URL from stack outputs
+   .venv/Scripts/python.exe scripts/telegram_setup.py info
+   ```
+
+5. Enrol yourself and send the code to the bot:
+
+   ```bash
+   .venv/Scripts/python.exe scripts/player.py add --name "Alex" --tz Europe/London
+   # -> /start AB3KD9XY
+   ```
+
+---
+
+## Operator CLI
+
+```bash
+python scripts/player.py add --name "Alex" --tz Europe/London   # mint an enrolment code
+python scripts/player.py list                                   # every player, one line each
+python scripts/player.py show plr_xxx                           # profile + full timeline
+python scripts/player.py stop plr_xxx --reason "..."            # halt immediately
+python scripts/player.py pause plr_xxx / resume plr_xxx
+python scripts/player.py delete plr_xxx --yes                   # player and all their data
+```
+
+All of it runs through the same `backend/core` code the Lambda uses, so an
+operator STOP is the same STOP a player gets. Add `--env prod` to target prod.
+
+---
+
+## How the safety layer is built
+
+`backend/core/dispatch.py` is the **single outbound chokepoint**. Nothing else
+may call a channel's send method. Four gates, in this order:
+
+| # | Gate | Why it is where it is |
+|---|---|---|
+| 1 | player status | a stopped or paused player never receives story content |
+| 2 | quiet hours | checked before anything is spent, so a deferred beat keeps its allowance |
+| 3 | content validation | a failing message is replaced, not sent |
+| 4 | daily rate limit | claimed last, so only a message that will actually go out burns one of the six |
+
+**System replies skip gates 2–4, deliberately.** The spec requires STOP to work
+"at any point" *and* forbids outbound messages between 22:00 and 08:00. Those
+two rules conflict unless out-of-character replies are exempt — and a player
+who texts at 23:30 is demonstrably awake. STOP confirmations, `/real` and PAUSE
+acknowledgements are therefore always delivered. In-character story content
+never is.
+
+Command parsing is strict about scope and loose about form: `STOP`, `stop.`,
+`/stop`, `please stop`, `STOP!` and `cancel` all halt the story, while "I had
+to stop at the lights" does not — it raises a `needs_review` flag on the
+timeline for a human instead. Same for "is this real?" and "I'm scared".
+
+Content validation (`backend/core/validation.py`) is regex over *assertions*,
+not bare nouns: a regex cannot tell a fictional death from a claimed real one,
+but it can catch emergency instructions, authority claims, credential requests
+and unsafe directives. It is tested from both sides — every forbidden shape is
+refused, and eight samples of ordinary story prose must pass. Phase 3 adds a
+model-based second pass on top; this layer stays, because it cannot be talked
+out of its rules.
+
+---
+
 ## Rules that are not negotiable
 
 These are enforced in code, never left to the model:

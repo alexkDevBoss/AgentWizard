@@ -16,6 +16,7 @@ htmlcov/
 
 # --- cdk ---
 cdk.out/
+.build/
 .cdk.staging/
 cdk.context.json
 
