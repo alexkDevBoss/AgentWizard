@@ -95,6 +95,16 @@ def _handle_update(update: dict) -> None:
         _handle_unenrolled(chat_id, command, argument)
         return
 
+    # A bound chat can still be moved to a different player, but only with a
+    # code the operator minted -- which is what makes this an operator action
+    # and not self-signup. Without this a chat is stuck on its first player
+    # forever, so a finished player could never start a second arc.
+    if command is Command.START and argument:
+        target = store.player_id_for_code(argument)
+        if target and target != player_id:
+            _rebind(chat_id, previous=player_id, target=target, code=argument)
+            return
+
     player = store.get_player(player_id)
     if player is None:
         logs.error("player.missing_for_chat", chat_id=chat_id, player_id=player_id)
@@ -122,6 +132,35 @@ def _handle_unenrolled(chat_id: int, command: Command, argument: str | None) -> 
 
     logs.info("telegram.unenrolled_chat", chat_id=chat_id, command=str(command))
     dispatch.send_system_to_chat(chat_id, safety.UNKNOWN_CHAT)
+
+
+def _rebind(chat_id: int, *, previous: str, target: str, code: str) -> None:
+    """Move a chat from one player to another.
+
+    Logged loudly: if the previous player was still running, this has just cut
+    off their only channel, and the operator should see that in the timeline
+    rather than discover it when a beat fails to arrive.
+    """
+    old_player = store.get_player(previous)
+    still_running = old_player is not None and not old_player.is_stopped
+    logs.warn(
+        "enrolment.rebind",
+        chat_id=chat_id,
+        previous_player_id=previous,
+        target_player_id=target,
+        previous_was_running=still_running,
+    )
+
+    store.unbind_chat(previous)
+    store.record_event(
+        previous,
+        direction=Direction.OUT,
+        channel=Channel.ADMIN,
+        kind=EventKind.SYSTEM,
+        text=f"Telegram chat moved to {target}. This player is no longer reachable.",
+        source="enrolment",
+    )
+    _enrol(chat_id, target, code)
 
 
 def _enrol(chat_id: int, player_id: str, code: str) -> None:

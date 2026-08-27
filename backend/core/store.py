@@ -208,6 +208,19 @@ def bind_chat(channel: Channel | str, chat_id: int | str, player_id: str) -> Non
     )
 
 
+def unbind_chat(player_id: str) -> None:
+    """Detach a player from their channel without deleting them.
+
+    Used when a chat is moved to a different player: the old player keeps their
+    whole timeline but is no longer reachable, so nothing can be sent to a chat
+    that now belongs to someone else.
+    """
+    _table().update_item(
+        Key={"pk": player_pk(player_id), "sk": "PROFILE"},
+        UpdateExpression="REMOVE telegram_chat_id",
+    )
+
+
 def player_id_for_chat(channel: Channel | str, chat_id: int | str) -> str | None:
     resp = _table().get_item(Key={"pk": chat_pk(channel, chat_id), "sk": "PLAYER"})
     item = resp.get("Item")

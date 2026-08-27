@@ -262,3 +262,67 @@ def test_a_handler_failure_still_answers_200(
 
     response = webhook.handler(request(update("hello")))
     assert response["statusCode"] == 200
+
+
+# ------------------------------------------------------------ re-enrolment
+
+
+def make_pending(player_id: str, code: str) -> Player:
+    pending = Player(
+        player_id=player_id,
+        display_name="Second Arc",
+        timezone="Europe/London",
+        status=PlayerStatus.PENDING,
+        enrolment_code=code,
+    )
+    store.put_player(pending)
+    store.put_enrolment_code(code, player_id)
+    return pending
+
+
+def test_a_bound_chat_can_be_moved_to_a_new_player(player, telegram, frozen) -> None:
+    """Otherwise a chat is stuck on its first player and can never run a second arc."""
+    frozen(DAYTIME)
+    make_pending("plr_second00001", "NEWARC01")
+
+    webhook.handler(request(update("/start NEWARC01")))
+
+    assert store.player_id_for_chat(Channel.TELEGRAM, 42) == "plr_second00001"
+    assert store.get_player("plr_second00001").status is PlayerStatus.ACTIVE
+    assert store.get_player("plr_second00001").telegram_chat_id == 42
+    assert telegram.last == safety.ENROLLED
+
+
+def test_the_previous_player_becomes_unreachable_not_deleted(
+    player, telegram, frozen
+) -> None:
+    frozen(DAYTIME)
+    make_pending("plr_second00001", "NEWARC01")
+
+    webhook.handler(request(update("/start NEWARC01")))
+
+    previous = store.get_player(player.player_id)
+    assert previous is not None  # their history is kept
+    assert previous.telegram_chat_id is None
+    assert any(
+        "no longer reachable" in (e.get("text") or "")
+        for e in store.timeline(player.player_id)
+    )
+
+
+def test_a_bad_code_does_not_move_a_bound_chat(player, telegram, frozen) -> None:
+    frozen(DAYTIME)
+    webhook.handler(request(update("/start NOTACODE")))
+
+    assert store.player_id_for_chat(Channel.TELEGRAM, 42) == player.player_id
+    assert store.get_player(player.player_id).telegram_chat_id == 42
+
+
+def test_a_code_for_the_same_player_is_not_a_rebind(player, telegram, frozen) -> None:
+    frozen(DAYTIME)
+    store.put_enrolment_code("SAMEONE1", player.player_id)
+
+    webhook.handler(request(update("/start SAMEONE1")))
+
+    assert store.get_player(player.player_id).telegram_chat_id == 42
+    assert telegram.last == safety.REAL_TEXT
