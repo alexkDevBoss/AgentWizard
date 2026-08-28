@@ -105,10 +105,73 @@ def telegram(monkeypatch) -> FakeTelegram:
     return fake
 
 
+class FakeModel:
+    """Stands in for Bedrock. Records every call; never touches the network.
+
+    Installed for the whole suite by an autouse fixture rather than per test,
+    so a test that forgets to ask for it fails loudly instead of quietly
+    billing a real model.
+    """
+
+    def __init__(self) -> None:
+        self.text = "The workshop is freezing and I have found something odd."
+        self.error: Exception | None = None
+        self.review_error: Exception | None = None
+        self.verdict: dict = {"safe": True, "rules": [], "reason": "ok"}
+        self.writes: list[dict] = []
+        self.reviews: list[dict] = []
+
+    def write(self, *, system, messages, **_kwargs) -> str:
+        self.writes.append({"system": system, "messages": messages})
+        if self.error:
+            raise self.error
+        return self.text
+
+    def judge(self, *, system, messages, tool, **_kwargs) -> dict:
+        self.reviews.append({"system": system, "messages": messages, "tool": tool})
+        if self.review_error:
+            raise self.review_error
+        return self.verdict
+
+    # convenience -----------------------------------------------------------
+
+    def refuse(self, *rules: str, reason: str = "unsafe") -> None:
+        self.verdict = {"safe": False, "rules": list(rules), "reason": reason}
+
+    @property
+    def last_system(self) -> str:
+        return self.writes[-1]["system"]
+
+    @property
+    def last_messages(self) -> list[dict]:
+        return self.writes[-1]["messages"]
+
+
+@pytest.fixture(autouse=True)
+def story(monkeypatch) -> FakeModel:
+    """Every test runs against a fake model. No test may reach Bedrock."""
+    from backend.core import model
+
+    fake = FakeModel()
+    monkeypatch.setattr(model, "write", fake.write)
+    monkeypatch.setattr(model, "judge", fake.judge)
+
+    def forbidden():
+        raise AssertionError("a test tried to build a real Bedrock client")
+
+    monkeypatch.setattr(model, "client", forbidden)
+    return fake
+
+
 @pytest.fixture
 def frozen(monkeypatch):
-    """Pin the clock that dispatch reads. Returns a setter."""
-    from backend.core import dispatch
+    """Pin every clock in the enforcement path. Returns a setter.
+
+    Both modules are patched, not just dispatch: the engine derives the current
+    beat from the same instant that dispatch checks quiet hours against, and a
+    test where those two disagree is testing a situation that cannot happen.
+    """
+    from backend.core import dispatch, engine
 
     state = {"now": datetime(2026, 3, 10, 15, 0, tzinfo=UTC)}
 
@@ -116,6 +179,7 @@ def frozen(monkeypatch):
         state["now"] = dt
 
     monkeypatch.setattr(dispatch, "now_utc", lambda: state["now"])
+    monkeypatch.setattr(engine, "now_utc", lambda: state["now"])
     return set_now
 
 

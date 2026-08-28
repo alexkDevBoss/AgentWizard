@@ -16,7 +16,16 @@ import json
 from typing import Any
 
 from backend.channels import telegram as tg
-from backend.core import control, dispatch, logs, safety, secrets, store
+from backend.core import (
+    config,
+    control,
+    dispatch,
+    engine,
+    logs,
+    safety,
+    secrets,
+    store,
+)
 from backend.core.clock import iso, now_utc
 from backend.core.models import (
     Channel,
@@ -87,6 +96,23 @@ def _handle_update(update: dict) -> None:
     text = described["text"]
     if chat_id is None:
         return
+
+    # Claim the update before doing any work. Generation turned this handler
+    # from one that answered in milliseconds into one that can take several
+    # seconds, and Telegram retries anything it does not get a 2xx for -- a
+    # retry arriving mid-generation would answer the same message twice and
+    # spend two of the player's six daily messages on it.
+    #
+    # The trade is deliberate: an update that is claimed and then fails is not
+    # retried. A dropped reply is recoverable and visible in the log; a
+    # duplicate one is neither.
+    update_id = described.get("update_id")
+    if update_id is not None:
+        try:
+            store.claim_update(Channel.TELEGRAM, update_id)
+        except store.AlreadyHandled:
+            logs.info("telegram.duplicate_update", update_id=update_id)
+            return
 
     command, argument = safety.parse_command(text)
     player_id = store.player_id_for_chat(Channel.TELEGRAM, chat_id)
@@ -172,6 +198,11 @@ def _enrol(chat_id: int, player_id: str, code: str) -> None:
     player.telegram_chat_id = chat_id
     player.status = PlayerStatus.ACTIVE
     player.last_contact_at = iso(now_utc())
+    # The arc starts when the player actually arrives, not when the operator
+    # minted their code -- a code sent on Monday and redeemed on Thursday would
+    # otherwise drop them into day four of a story they have not read.
+    player.arc_id = player.arc_id or config.DEFAULT_ARC_ID
+    player.arc_started_at = player.arc_started_at or iso(now_utc())
     store.put_player(player)
     store.bind_chat(Channel.TELEGRAM, chat_id, player_id)
     store.consume_enrolment_code(code)
@@ -249,21 +280,4 @@ def _dispatch_command(
                 source="command",
             )
         case _:
-            _echo(player, described)
-
-
-def _echo(player: Player, described: dict) -> None:
-    """Phase 1 stand-in for the story engine.
-
-    Routed through the normal story path on purpose, so quiet hours, the daily
-    rate limit, validation and the footer are all exercised by a real message
-    before any of Phase 3 exists.
-    """
-    if described["has_photo"]:
-        body = "Picture received. I can't look at it properly yet."
-    elif described["has_location"]:
-        body = "Location received."
-    else:
-        body = f"You said: {described['text']}"
-
-    dispatch.send_to_player(player, body, source="echo")
+            engine.respond(player, described)

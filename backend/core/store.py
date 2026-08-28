@@ -29,6 +29,10 @@ from backend.core.models import Channel, Direction, EventKind, Player, PlayerSta
 # Daily counters are only interesting for a couple of days after the fact.
 QUOTA_TTL_DAYS = 3
 
+# Long enough to outlive Telegram's retry window by a wide margin, short
+# enough that these rows never accumulate.
+UPDATE_TTL_DAYS = 2
+
 _resource = None
 
 
@@ -286,6 +290,77 @@ def timeline(player_id: str, *, limit: int = 100, ascending: bool = True) -> lis
         Limit=limit,
     )
     return [_undecimal(i) for i in resp.get("Items", [])]
+
+
+# -------------------------------------------------------------------- beats
+
+
+def record_beat(player_id: str, beat_id: str, **fields: Any) -> None:
+    """Upsert what happened during one beat.
+
+    Separate from the timeline because it answers a different question. The
+    timeline is "what was said"; this is "how far through the arc is this
+    player, and did the day land". The admin panel reads both.
+    """
+    if not fields:
+        return
+    names = {f"#f{i}": k for i, k in enumerate(fields)}
+    values = {f":v{i}": v for i, v in enumerate(fields.values())}
+    assignments = ", ".join(f"{n} = {v}" for n, v in zip(names, values, strict=True))
+    _table().update_item(
+        Key={"pk": player_pk(player_id), "sk": f"BEAT#{beat_id}"},
+        UpdateExpression=f"SET {assignments}",
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=_clean(values),
+    )
+
+
+def get_beat(player_id: str, beat_id: str) -> dict | None:
+    resp = _table().get_item(Key={"pk": player_pk(player_id), "sk": f"BEAT#{beat_id}"})
+    item = resp.get("Item")
+    return _undecimal(item) if item else None
+
+
+def beats(player_id: str) -> list[dict]:
+    resp = _table().query(
+        KeyConditionExpression=(
+            boto3.dynamodb.conditions.Key("pk").eq(player_pk(player_id))
+            & boto3.dynamodb.conditions.Key("sk").begins_with("BEAT#")
+        )
+    )
+    return [_undecimal(i) for i in resp.get("Items", [])]
+
+
+# ------------------------------------------------------------- idempotency
+
+
+class AlreadyHandled(Exception):
+    """This inbound update has been processed before."""
+
+
+def claim_update(channel: Channel | str, update_id: int | str) -> None:
+    """Claim one inbound update, or raise if it was already claimed.
+
+    Telegram retries any update it does not get a 2xx for, and generation
+    turned a handler that answered in milliseconds into one that can take
+    several seconds. A retry arriving mid-generation would otherwise produce a
+    second reply to the same message and burn a second message from the
+    player's daily six.
+    """
+    try:
+        _table().put_item(
+            Item={
+                "pk": f"UPDATE#{channel}#{update_id}",
+                "sk": "SEEN",
+                "at": iso(now_utc()),
+                "ttl": ttl_epoch(now_utc(), UPDATE_TTL_DAYS),
+            },
+            ConditionExpression="attribute_not_exists(pk)",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise AlreadyHandled(str(update_id)) from exc
+        raise
 
 
 # -------------------------------------------------------------- rate limits

@@ -82,6 +82,18 @@ def next_allowed_time(dt: datetime, tz_name: str | None) -> datetime:
     return target.astimezone(UTC)
 
 
+def arc_day(started_at: datetime, now: datetime, tz_name: str | None) -> int:
+    """Which day of the arc it is for this player, 1-based.
+
+    Counted in *player-local calendar days*, not 24-hour periods: a player who
+    enrols at 23:30 is on day 2 half an hour later, which is what both they and
+    the operator would say. Never returns less than 1.
+    """
+    start = to_local(started_at, tz_name).date()
+    today = to_local(now, tz_name).date()
+    return max(1, (today - start).days + 1)
+
+
 def ttl_epoch(dt: datetime, days: int) -> int:
     """DynamoDB TTL value: whole seconds since the epoch."""
     return int((dt + timedelta(days=days)).timestamp())

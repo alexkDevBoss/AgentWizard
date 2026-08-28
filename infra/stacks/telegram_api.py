@@ -11,9 +11,10 @@ handler verifies in constant time against Secrets Manager.
 
 from __future__ import annotations
 
-from aws_cdk import Duration, RemovalPolicy
+from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apigatewayv2 as apigw
 from aws_cdk import aws_dynamodb as dynamodb
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as cwlogs
 from aws_cdk import aws_secretsmanager as secretsmanager
@@ -72,10 +73,16 @@ class TelegramApi(Construct):
             architecture=lambda_.Architecture.X86_64,
             handler="backend.handlers.telegram_webhook.handler",
             code=lambda_.Code.from_asset(build_lambda_asset()),
-            # The handler deliberately sleeps for a second or two before an
-            # in-character reply; 30s leaves room for that plus two Bot API
-            # round trips.
+            # 30s is not a choice -- it is API Gateway's ceiling for an HTTP
+            # API integration, and going over it returns a 504 that Telegram
+            # then retries. The handler's own budget (two model calls, see
+            # backend/core/config.py) is sized to finish inside it with room
+            # to spare, and a retry that does arrive is dropped by the
+            # update-id claim rather than answered twice.
             timeout=Duration.seconds(30),
+            # Generation is network-bound, not CPU-bound, but Lambda scales
+            # network and CPU with memory and 512MB keeps the SDK's import
+            # time down on a cold start.
             memory_size=512,
             reserved_concurrent_executions=RESERVED_CONCURRENCY,
             log_group=self.log_group,
@@ -91,9 +98,34 @@ class TelegramApi(Construct):
 
         table.grant_read_write_data(self.function)
         secret.grant_read(self.function)
+        self._grant_bedrock(self.function)
 
         api.add_routes(
             path=WEBHOOK_PATH,
             methods=[apigw.HttpMethod.POST],
             integration=HttpLambdaIntegration("WebhookIntegration", self.function),
+        )
+
+    def _grant_bedrock(self, function: lambda_.Function) -> None:
+        """Permission to invoke Claude, scoped to Anthropic models.
+
+        Two resources, not one. The model id in `backend/core/config.py` is a
+        cross-region inference profile (`us.anthropic....`), and invoking one
+        needs the profile itself *and* the foundation models it may route to --
+        which live in whichever region the profile picks, hence the wildcard
+        region on the second ARN. Granting only the profile produces an
+        AccessDenied that names a model nobody asked for.
+        """
+        function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                ],
+                resources=[
+                    f"arn:aws:bedrock:*:{Stack.of(self).account}"
+                    ":inference-profile/us.anthropic.*",
+                    "arn:aws:bedrock:*::foundation-model/anthropic.*",
+                ],
+            )
         )

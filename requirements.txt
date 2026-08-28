@@ -8,3 +8,14 @@
 
 PyYAML==6.0.3
 tzdata==2026.3
+
+# The Anthropic SDK, used against Bedrock via `AnthropicBedrock`. This is the
+# one heavy dependency in the project: it pulls pydantic and httpx2 and takes
+# the unpacked bundle from ~2MB to ~35MB, which is still far inside Lambda's
+# 250MB unpacked limit.
+#
+# Installed WITHOUT the [bedrock] extra on purpose -- that extra is just
+# boto3+botocore, which the python3.12 runtime already provides and which
+# would add another 28MB for nothing. Credentials and SigV4 signing come from
+# the runtime's botocore.
+anthropic==1.2.0

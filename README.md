@@ -57,7 +57,7 @@ backend/        Python 3.12
   handlers/       Lambda entry points (thin)
   core/           story engine, state, safety validation
   channels/       telegram.py, email.py, voice.py
-  story/          arc definitions as YAML data
+  story/          arc.py + arcs/*.yaml — the story as data, not code
 voice/          Fargate container for the Nova Sonic call session
 admin/          React + Vite operator console
 scripts/        operator CLI (start arc, stop player, delete player)
@@ -169,6 +169,79 @@ Verify with `ls .build/backend-deps/yaml/` — you should see
 
 ---
 
+## Phase 2 resources
+
+On top of Phase 1, the operator console and the API behind it:
+
+**`AWS::Cognito::UserPool`** — one operator pool, hosted UI, no self-signup.
+Users are created by hand.
+
+**`AWS::S3::Bucket` + `AWS::CloudFront::Distribution`** — the React console,
+served from CloudFront. Its configuration (API endpoint, Cognito ids) is
+fetched at runtime from `/config.json`, written from stack outputs at deploy
+time, so no identifiers are committed.
+
+**Admin routes on the HTTP API**, behind a JWT authorizer. The important one
+is `POST /admin/players/{id}/message`, and the important property is that it
+is **not privileged**: it goes through the same `dispatch.send_to_player`
+chokepoint everything else does, so an operator typing at 23:30 is held for
+quiet hours and the seventh message of the day is refused.
+
+The console deploys separately from the stack:
+
+```bash
+make admin-config     # write admin/public/config.json from stack outputs
+make admin-dev        # run it locally against dev
+make admin-deploy     # build, upload to S3, invalidate CloudFront
+```
+
+---
+
+## Phase 3 resources
+
+No new AWS resources — one IAM statement and a much larger Lambda bundle.
+
+**`bedrock:InvokeModel`** on the webhook Lambda's role, scoped to Anthropic
+models. Two ARNs, not one: the model id is a *cross-region inference profile*,
+and invoking one needs permission on the profile **and** on the foundation
+models it may route to, which live in whichever region the profile picks.
+
+**The Lambda bundle grows from ~2MB to ~36MB unpacked**, because
+`requirements.txt` now carries the `anthropic` SDK (and with it pydantic and
+httpx2). That is still far inside Lambda's 250MB unpacked limit. The SDK is
+installed *without* its `[bedrock]` extra — that extra is only boto3 and
+botocore, which the runtime already provides.
+
+### Which model, and why not a newer one
+
+`backend/core/config.py` pins `us.anthropic.claude-opus-4-6-v1`. Two
+constraints produced that string, both verified against the live account
+rather than read off a docs page:
+
+- **This account cannot reach Claude Opus 5, Opus 4.8/4.7, or Sonnet 5.** They
+  return `403 ... is not available for this account` on Bedrock. Opus 4.6 is
+  the most capable model it is entitled to. Getting the newer ones appears to
+  need an AWS Sales conversation, not a console toggle.
+- **The `us.` prefix is required.** A bare `anthropic.claude-opus-4-6-v1` is
+  rejected for on-demand throughput; only the cross-region inference profile
+  works.
+
+There is a second Bedrock endpoint — the Messages API, reached through the
+SDK's `AnthropicBedrockMantle` client — and it is **not usable here**: it
+serves only the newer model ids this account is locked out of, returning 404
+for everything else. `AnthropicBedrock`, the InvokeModel path, is what works.
+
+If the account is later granted Opus 5, changing `STORY_MODEL` and re-running
+the tests is the whole migration.
+
+**Cost.** Bedrock spend lands on the AWS bill, so the account-wide $50/month
+budget from Phase 0 covers it — which is the main reason for using Bedrock at
+all rather than the first-party API. At the full ten players by six messages a
+day, Opus 4.6 runs roughly $30–40/month; in dev with one or two players it is
+cents. Every call logs its token counts under the `model.usage` event.
+
+---
+
 ## Wiring up the bot
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
@@ -245,9 +318,86 @@ Content validation (`backend/core/validation.py`) is regex over *assertions*,
 not bare nouns: a regex cannot tell a fictional death from a claimed real one,
 but it can catch emergency instructions, authority claims, credential requests
 and unsafe directives. It is tested from both sides — every forbidden shape is
-refused, and eight samples of ordinary story prose must pass. Phase 3 adds a
-model-based second pass on top; this layer stays, because it cannot be talked
-out of its rules.
+refused, and eight samples of ordinary story prose must pass. A model-based
+second pass now sits on top of it for generated content (see *How the story
+engine works*); this layer stays regardless, because it cannot be talked out
+of its rules.
+
+---
+
+## How the story engine works
+
+`backend/core/engine.py` replaced the Phase 1 echo. One inbound message
+produces one generated reply, in four steps:
+
+1. **Work out the beat.** `backend/story/arcs/*.yaml` holds the arc — premise,
+   cast, and one beat per day. Which beat is current is *arithmetic over
+   player-local calendar days* (`clock.arc_day`), never a model judgement.
+   Asking a model "is this beat finished?" makes the shape of someone's week
+   depend on the thing least able to be held to it: a stuck beat repeats
+   forever, a runaway one burns the arc in an afternoon.
+2. **Replay the timeline.** The last 40 player-visible events become the
+   conversation, oldest first. System replies, commands and blocked sends are
+   excluded — replaying them teaches the model to write STOP confirmations —
+   and the out-of-character footer is stripped, because dispatch adds it on
+   the way out and leaving it in would double it.
+3. **Generate**, with adaptive thinking and the thinking summary suppressed.
+4. **Review**, then dispatch.
+
+### The engine has no special powers
+
+Generated content passes exactly the four gates an operator's hand-typed
+message does, and carries a fifth burden the operator does not:
+
+| | operator | engine |
+|---|---|---|
+| status / quiet hours / rate limit | yes | yes |
+| regex content validation | yes | yes |
+| model-based review | no | **yes** |
+
+The review pass (`backend/core/review.py`) reads meaning, which the regex
+cannot: it is what catches a message that trips no pattern while still leaving
+a player convinced something real is happening. It applies only to *generated*
+text — an operator is a human who is accountable for their own words, and
+sending them to a model for approval would be both surprising and slower.
+
+Two decisions in there worth not re-litigating:
+
+- **A reviewer that cannot be reached does not block the message.** It has
+  already passed every deterministic rule; failing closed would mean a
+  throttled account silently replaces someone's week with "…give me a
+  moment." The send is logged loudly and flagged `needs_review` instead.
+- **A verdict of `safe: true` that also names a broken rule is treated as a
+  refusal.** Trusting the boolean is the dangerous way to resolve that
+  contradiction.
+
+### When generation fails
+
+Every failure path ends with the player getting something sane and the
+operator getting a flag. A model timeout, a refused review, or a broken arc
+file all fall back to `safety.SAFE_FALLBACK` — sent as **ordinary story
+content**, so it is held during quiet hours and spends one of the six exactly
+as the message it replaced would have. Exempting it would turn a failing model
+into a way to message somebody at 23:30.
+
+### Duplicate updates
+
+The handler claims each Telegram `update_id` in DynamoDB before doing any
+work. Generation turned a handler that answered in milliseconds into one that
+takes several seconds, and Telegram retries anything it does not get a 2xx
+for; without the claim, a retry arriving mid-generation would answer the same
+message twice and spend two of the player's six on it. The trade is
+deliberate: a claimed update that then fails is not retried. A dropped reply
+is recoverable and visible in the log; a duplicate one is neither.
+
+### Writing a new arc
+
+Drop a YAML file in `backend/story/arcs/` and point `DEFAULT_ARC_ID` at it, or
+set a player's `arc_id`. `tests/test_arc.py` validates every shipped arc on
+every run, so a malformed one fails in CI rather than halfway through
+somebody's week. Nothing in an arc file is a safety control — the rules apply
+regardless of what its text asks for, and an arc that demanded something
+forbidden would simply have its messages refused.
 
 ---
 
@@ -275,6 +425,13 @@ No secrets, tokens or phone numbers in the repo or in git history.
 
 ## Gotchas
 
+- **A Bedrock `403 ... is not available for this account`** is model
+  entitlement, not IAM. Adding permissions will not fix it; the account has to
+  be granted the model. Check what it can actually reach with a real call —
+  `list-foundation-models` lists models the account cannot invoke.
+- **`Thinking may not be enabled when tool_choice forces tool use`** — the two
+  cannot be combined. That is why the writer thinks and returns prose while
+  the reviewer returns a forced-tool verdict without thinking.
 - **Destroying and immediately redeploying dev** will fail on the secret name:
   deleted secrets sit in a 7–30 day recovery window that blocks reuse of the
   name. Force it through with

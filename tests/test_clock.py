@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import pytest
 
 from backend.core.clock import (
+    arc_day,
     in_quiet_hours,
     local_date_key,
     next_allowed_time,
@@ -106,3 +107,37 @@ def test_quiet_hours_follow_dst_not_a_fixed_offset() -> None:
 
     assert in_quiet_hours(est, "America/New_York") is True
     assert in_quiet_hours(edt, "America/New_York") is False
+
+
+# ------------------------------------------------------------- arc days
+
+
+def test_the_arc_starts_on_day_one() -> None:
+    start = at(15)
+    assert arc_day(start, start, "Europe/London") == 1
+
+
+def test_a_day_is_a_local_calendar_day_not_twenty_four_hours() -> None:
+    """Enrol at 23:30 and you are on day 2 half an hour later, as you would say."""
+    start = datetime(2026, 3, 10, 23, 30, tzinfo=UTC)
+    later = datetime(2026, 3, 11, 0, 5, tzinfo=UTC)
+    assert arc_day(start, later, "Europe/London") == 2
+
+
+def test_the_day_is_counted_in_the_players_timezone() -> None:
+    """22:00 UTC is already tomorrow in Tokyo and still today in London."""
+    start = datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+    later = datetime(2026, 3, 10, 22, 0, tzinfo=UTC)
+    assert arc_day(start, later, "Europe/London") == 1
+    assert arc_day(start, later, "Asia/Tokyo") == 2
+
+
+def test_the_day_never_goes_below_one() -> None:
+    """A clock skew must not produce day zero and a missing beat."""
+    start = at(15, day=10)
+    assert arc_day(start, at(15, day=8), "Europe/London") == 1
+
+
+def test_a_week_of_silence_still_advances_the_day() -> None:
+    start = at(15, day=10)
+    assert arc_day(start, at(15, day=17), "Europe/London") == 8

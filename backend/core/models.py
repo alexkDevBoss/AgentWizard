@@ -82,6 +82,9 @@ class Player:
     timezone: str = "UTC"
     status: PlayerStatus = PlayerStatus.PENDING
     arc_id: str | None = None
+    #: When the arc began, in UTC. The current beat is derived from this and
+    #: the player's timezone, so it is set once, at enrolment, and not moved.
+    arc_started_at: str | None = None
     telegram_chat_id: int | None = None
     enrolment_code: str | None = None
     created_at: str = field(default_factory=lambda: iso(now_utc()))

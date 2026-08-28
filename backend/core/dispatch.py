@@ -208,6 +208,23 @@ def send_to_player(
     )
 
 
+def show_typing(player: Player) -> None:
+    """Put the chat into "typing…" without sending anything.
+
+    Generation takes several seconds, and the indicator is far more convincing
+    covering real work than it is covering an artificial pause. The engine
+    calls this before it starts and then sends with ``simulate_typing=False``,
+    so the player waits once rather than twice. A failed indicator is never
+    allowed to matter.
+    """
+    if player.telegram_chat_id is None:
+        return
+    try:
+        telegram().send_chat_action(player.telegram_chat_id, "typing")
+    except Exception as exc:
+        logs.warn("telegram.typing_failed", player_id=player.player_id, error=str(exc))
+
+
 def send_system_to_chat(chat_id: int | str, text: str) -> None:
     """Reply to a chat that has no player behind it.
 

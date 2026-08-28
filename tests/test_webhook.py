@@ -6,6 +6,7 @@ faked: the Bot API transport and the Secrets Manager lookup.
 
 from __future__ import annotations
 
+import itertools
 import json
 from datetime import UTC, datetime
 
@@ -27,7 +28,18 @@ def webhook_secret(monkeypatch):
     monkeypatch.setattr(secrets, "telegram_bot_token", lambda: "fake:token")
 
 
-def update(text: str | None = None, *, chat_id: int = 42, **message_extra) -> dict:
+#: Telegram never reuses an update_id, and the handler now depends on that to
+#: drop retries -- so the helper must not reuse one either.
+_update_ids = itertools.count(1)
+
+
+def update(
+    text: str | None = None,
+    *,
+    chat_id: int = 42,
+    update_id: int | None = None,
+    **message_extra,
+) -> dict:
     message = {
         "message_id": 7,
         "date": 1772000000,
@@ -37,7 +49,10 @@ def update(text: str | None = None, *, chat_id: int = 42, **message_extra) -> di
     }
     if text is not None:
         message["text"] = text
-    return {"update_id": 1, "message": message}
+    return {
+        "update_id": next(_update_ids) if update_id is None else update_id,
+        "message": message,
+    }
 
 
 def request(body: dict, *, secret: str | None = SECRET) -> dict:
@@ -180,11 +195,17 @@ def test_real_works_after_stopping(player, telegram, frozen) -> None:
 # ------------------------------------------------------------- ordinary traffic
 
 
-def test_an_ordinary_message_gets_a_reply(player, telegram, frozen) -> None:
+def test_an_ordinary_message_gets_a_generated_reply(
+    player, telegram, frozen, story
+) -> None:
     frozen(DAYTIME)
+    story.text = "Wren here. The bench by the shop? That is the one."
     webhook.handler(request(update("found the bench")))
 
-    assert "found the bench" in telegram.last
+    assert story.text in telegram.last
+    # What the player said reaches the model as the last turn of the
+    # conversation, not as a template the reply is built from.
+    assert story.last_messages[-1] == {"role": "user", "content": "found the bench"}
 
 
 def test_inbound_and_outbound_are_both_on_the_timeline(
@@ -195,6 +216,36 @@ def test_inbound_and_outbound_are_both_on_the_timeline(
 
     events = store.timeline(player.player_id)
     assert [e["direction"] for e in events] == ["in", "out"]
+
+
+def test_a_retried_update_is_not_answered_twice(
+    player, telegram, frozen, story
+) -> None:
+    """Telegram retries anything it does not get a 2xx for.
+
+    Generation made this handler slow enough for that to matter: a retry
+    arriving mid-generation would reply twice to one message and spend two of
+    the player's six on it.
+    """
+    frozen(DAYTIME)
+    retried = update("found the bench", update_id=9001)
+
+    webhook.handler(request(retried))
+    webhook.handler(request(retried))
+
+    assert len(telegram.sent) == 1
+    inbound = [e for e in store.timeline(player.player_id) if e["direction"] == "in"]
+    assert len(inbound) == 1
+
+
+def test_two_different_updates_are_both_answered(
+    player, telegram, frozen, story
+) -> None:
+    frozen(DAYTIME)
+    webhook.handler(request(update("one", update_id=9101)))
+    webhook.handler(request(update("two", update_id=9102)))
+
+    assert len(telegram.sent) == 2
 
 
 def test_a_photo_is_recorded_with_its_file_id(player, telegram, frozen) -> None:
