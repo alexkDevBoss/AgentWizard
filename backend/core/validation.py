@@ -115,7 +115,13 @@ _RULES: tuple[tuple[Rule, str, str], ...] = (
     (
         Rule.UNSAFE_INSTRUCTION,
         "sends the player out at night",
-        r"\b(go|head|come|drive|walk|meet me)\b[^.?!]{0,40}\b(at night|after dark|at midnight|at \d{1,2}\s?(am|pm)\b)",
+        # The hours are enumerated rather than matched as `\d{1,2}\s?(am|pm)`.
+        # The loose version also refused "head for the hall at 3pm", which is a
+        # perfectly good instruction in a daytime walking arc -- and a rule
+        # that fires on ordinary content gets worked around instead of obeyed.
+        r"\b(go|head|come|drive|walk|meet me)\b[^.?!]{0,40}"
+        r"\b(at night|after dark|at midnight"
+        r"|at ?(8|9|1[012])\s?pm\b|at ?(12|[1-5])\s?am\b)",
     ),
     (
         Rule.UNSAFE_INSTRUCTION,

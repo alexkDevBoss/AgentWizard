@@ -90,3 +90,47 @@ def test_the_reviewer_is_told_that_ordinary_fiction_is_not_a_violation() -> None
 
 def test_the_reviewer_is_told_to_stop_the_story_for_a_worried_player() -> None:
     assert "The story must yield to a worried player" in _prose(review.SYSTEM)
+
+
+# ------------------------------------------------------- which rules apply
+
+
+def test_the_walking_reviewer_does_not_treat_going_out_as_unsafe() -> None:
+    """The armchair rule refuses every message a walking arc exists to send."""
+    walking = _prose(review.system_prompt(walking=True))
+
+    assert "is exactly right and is NOT a violation" in walking
+    assert "asks the player to do something physically risky" not in walking
+
+
+def test_the_walking_reviewer_still_forbids_the_dangerous_parts() -> None:
+    walking = _prose(review.system_prompt(walking=True))
+
+    for rule in (
+        "onto private property",
+        "anywhere after dark",
+        "Sending them toward a person",
+        "photograph of a person",
+        "Any deadline, countdown",
+        "Asking again after they have said",
+    ):
+        assert rule in walking
+
+
+def test_the_two_briefs_differ_only_in_that_one_rule() -> None:
+    """Everything else -- impersonation, money, a worried player -- is shared."""
+    armchair = review.system_prompt(walking=False)
+    walking = review.system_prompt(walking=True)
+
+    assert armchair != walking
+    for shared in ("impersonation", "credential_or_money", "yield to a"):
+        assert shared in " ".join(armchair.split())
+        assert shared in " ".join(walking.split())
+
+
+def test_the_arc_kind_decides_which_brief_is_used(story) -> None:
+    review.review_outbound("Head for the fountain.", recent=[], walking=True)
+    assert "walking adventure" in story.reviews[-1]["system"]
+
+    review.review_outbound("Tell me about the tapes.", recent=[])
+    assert "walking adventure" not in story.reviews[-1]["system"]

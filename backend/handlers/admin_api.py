@@ -20,10 +20,13 @@ rather than swallowed.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from typing import Any
 
-from backend.core import control, dispatch, logs, store
+import boto3
+
+from backend.core import arcsmith, config, control, dispatch, geo, logs, places, store
 from backend.core.ids import enrolment_code
 from backend.core.ids import player_id as new_player_id
 from backend.core.models import (
@@ -34,9 +37,15 @@ from backend.core.models import (
     Player,
     PlayerStatus,
 )
+from backend.story.arc import ArcError, parse_arc
 
 DEFAULT_TIMELINE_LIMIT = 200
 MAX_TIMELINE_LIMIT = 1000
+
+#: Set by the stack to the arc-composer function's name. Absent in tests.
+COMPOSER_ENV = "ADVENTURE_COMPOSER_FUNCTION"
+
+_lambda_client = None
 
 
 class ApiError(Exception):
@@ -276,6 +285,151 @@ def add_note(event: dict) -> dict:
     return _response(201, {"added": True})
 
 
+# ------------------------------------------------------------------- arcs
+#
+# Composing takes 25-35 seconds against Bedrock, and API Gateway hangs up at
+# 30. So `compose` starts a background job and answers immediately with its
+# id; the console polls `arc_job` until it turns into a draft.
+
+
+def _lambda():
+    global _lambda_client
+    if _lambda_client is None:
+        _lambda_client = boto3.client(
+            "lambda", region_name=os.environ.get("AWS_REGION", config.REGION)
+        )
+    return _lambda_client
+
+
+def _coordinates(value: str | None) -> tuple[float, float]:
+    """Parse 'lat,lon'. The one place the console is allowed to send a position."""
+    try:
+        lat, lon = (float(part) for part in (value or "").split(","))
+    except ValueError:
+        raise ApiError(400, "expected a starting point as 'lat,lon'") from None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise ApiError(400, f"that is not a point on Earth: {value}")
+    return lat, lon
+
+
+def compose_arc(event: dict) -> dict:
+    player = _require_player(event)
+    body = _body(event)
+    lat, lon = _coordinates(body.get("at"))
+    job_id = enrolment_code().lower()
+
+    store.put_arc_job(player.player_id, job_id, status="running")
+    payload = {
+        "player_id": player.player_id,
+        "job_id": job_id,
+        "lat": lat,
+        "lon": lon,
+        "theme": (body.get("theme") or "").strip(),
+    }
+
+    function = os.environ.get(COMPOSER_ENV)
+    if not function:
+        raise ApiError(500, f"{COMPOSER_ENV} is not configured")
+    # Fire and forget. The job row is already 'running', so a console that
+    # polls before this returns still sees a sensible state.
+    _lambda().invoke(
+        FunctionName=function,
+        InvocationType="Event",
+        Payload=json.dumps(payload).encode("utf-8"),
+    )
+
+    logs.info(
+        "admin.arc_compose_started",
+        player_id=player.player_id,
+        job_id=job_id,
+        operator=_operator(event),
+    )
+    return _response(202, {"job_id": job_id, "status": "running"})
+
+
+def get_arc_job(event: dict) -> dict:
+    player = _require_player(event)
+    job_id = (event.get("pathParameters") or {}).get("job_id")
+    job = store.get_arc_job(player.player_id, job_id or "")
+    if job is None:
+        raise ApiError(404, f"no such job: {job_id}")
+    return _response(200, {"job": job})
+
+
+def get_arc(event: dict) -> dict:
+    player = _require_player(event)
+    arc = store.get_arc(player.player_id)
+    if arc is None:
+        raise ApiError(404, "no arc composed for this player yet")
+    return _response(200, {"arc": arc, "beat_order": player.beat_order})
+
+
+def put_arc(event: dict) -> dict:
+    """Save an edited arc.
+
+    The operator may rewrite anything, but the result still has to pass the
+    same two checks a generated one does: it must parse and validate as an
+    arc, and the route must be something a person can actually walk. Swapping
+    one stop for another is exactly how an editable arc grows a five-kilometre
+    leg, and the player is the one who would find that out.
+    """
+    player = _require_player(event)
+    body = _body(event)
+    arc_item = body.get("arc")
+    if not isinstance(arc_item, dict):
+        raise ApiError(400, "body needs an 'arc' object")
+
+    try:
+        arc = parse_arc(arc_item, source="edited")
+    except ArcError as exc:
+        raise ApiError(422, f"that arc is not valid: {exc}") from None
+
+    if arc.is_walk:
+        stops = [b.waypoint for b in arc.beats if b.waypoint]
+        try:
+            arcsmith.check_route(stops)
+        except arcsmith.ArcGenerationFailed as exc:
+            raise ApiError(422, str(exc)) from None
+
+    store.put_arc(player.player_id, arc.to_item())
+    if body.get("restart"):
+        store.set_beat_order(player.player_id, 1)
+
+    store.record_event(
+        player.player_id,
+        direction=Direction.OUT,
+        channel=Channel.ADMIN,
+        kind=EventKind.SYSTEM,
+        text=f"Arc saved: {arc.title} ({arc.length} stops).",
+        note=True,
+        source=f"operator:{_operator(event)}",
+    )
+    logs.info(
+        "admin.arc_saved",
+        player_id=player.player_id,
+        arc_id=arc.arc_id,
+        stages=arc.length,
+        operator=_operator(event),
+    )
+    return _response(200, {"arc": arc.to_item()})
+
+
+def nearby_places(event: dict) -> dict:
+    """Alternatives for a stop, for the editor's swap control."""
+    _require_player(event)
+    params = event.get("queryStringParameters") or {}
+    lat, lon = _coordinates(params.get("at"))
+    try:
+        found = places.find_nearby(
+            geo.Point(lat, lon),
+            radius_m=arcsmith.SEARCH_RADIUS_M,
+            limit=arcsmith.CANDIDATE_LIMIT,
+        )
+    except places.PlacesUnavailable as exc:
+        raise ApiError(503, str(exc)) from None
+    return _response(200, {"places": [w.to_item() for w in found]})
+
+
 ROUTES: dict[str, Callable[[dict], dict]] = {
     "GET /admin/me": get_me,
     "GET /admin/players": list_players,
@@ -287,6 +441,11 @@ ROUTES: dict[str, Callable[[dict], dict]] = {
     "POST /admin/players/{player_id}/stop": _control_route("stop"),
     "POST /admin/players/{player_id}/pause": _control_route("pause"),
     "POST /admin/players/{player_id}/resume": _control_route("resume"),
+    "POST /admin/players/{player_id}/arc/compose": compose_arc,
+    "GET /admin/players/{player_id}/arc/jobs/{job_id}": get_arc_job,
+    "GET /admin/players/{player_id}/arc": get_arc,
+    "PUT /admin/players/{player_id}/arc": put_arc,
+    "GET /admin/players/{player_id}/places": nearby_places,
 }
 
 

@@ -63,7 +63,7 @@ VERDICT_TOOL = {
     },
 }
 
-SYSTEM = f"""You are the safety reviewer for an interactive fiction service.
+_TEMPLATE = f"""You are the safety reviewer for an interactive fiction service.
 
 A player has knowingly signed up for a written story delivered over a
 messaging app. They were told at enrolment, and are reminded regularly, that
@@ -89,12 +89,7 @@ Refuse a message only when it does one of these:
 - `{Rule.CREDENTIAL_OR_MONEY}` -- asks for money, payment, account details,
   passwords, codes, identity documents, or access to anything of the
   player's.
-- `{Rule.UNSAFE_INSTRUCTION}` -- asks the player to do something physically
-  risky or intrusive: go somewhere, especially after dark; enter, climb or
-  break into anywhere; approach, follow, confront or photograph a real
-  person; contact a real third party; drive; or anything that would put them
-  in front of a stranger. Asking them to think, remember, describe what is
-  already around them, or photograph an ordinary object is fine.
+{{unsafe_instruction}}
 - `{Rule.DENIES_FICTION}` -- claims the story is real, claims the sender is a
   real human rather than AI, or tells the player that something they are
   worried about is actually happening. This includes a character insisting
@@ -113,6 +108,46 @@ Judge only the candidate message. The conversation is context for that
 judgement, not the thing being judged."""
 
 
+#: The sit-down reading of "unsafe": the player is not going anywhere.
+_ARMCHAIR_UNSAFE = f"""\
+- `{Rule.UNSAFE_INSTRUCTION}` -- asks the player to do something physically
+  risky or intrusive: go somewhere, especially after dark; enter, climb or
+  break into anywhere; approach, follow, confront or photograph a real
+  person; contact a real third party; drive; or anything that would put them
+  in front of a stranger. Asking them to think, remember, describe what is
+  already around them, or photograph an ordinary object is fine."""
+
+#: The walking reading. Sending the player out is the point of the format, so
+#: the rule cannot be "never move them" -- it has to name what actually makes
+#: a destination unsafe. Left as the armchair version, this reviewer would
+#: refuse every message a walking arc exists to send.
+_WALKING_UNSAFE = f"""\
+- `{Rule.UNSAFE_INSTRUCTION}` -- sends the player somewhere unsafe, or makes
+  going feel urgent. This is a walking adventure and the player agreed to
+  walk, so being asked to go to a named public place in daylight, at their own
+  pace, is exactly right and is NOT a violation. What is a violation: sending
+  them indoors, onto private property, over or through anything, anywhere
+  needing a ticket or a fee, or anywhere after dark. Sending them toward a
+  person -- approaching, following, waiting for or watching anybody. Asking
+  for a photograph of a person, or of anything that would mean pointing a
+  camera at a stranger. Any deadline, countdown, or suggestion that they are
+  being followed or must hurry. Telling them to cross a road or commenting on
+  traffic as though the sender can see them. Asking again after they have said
+  they cannot or would rather not go somewhere."""
+
+
+def system_prompt(*, walking: bool) -> str:
+    """The reviewer's brief, matched to the kind of arc being played."""
+    return _TEMPLATE.replace(
+        "{unsafe_instruction}", _WALKING_UNSAFE if walking else _ARMCHAIR_UNSAFE
+    )
+
+
+#: The default brief, kept as a name for the tests and for callers that have
+#: no arc in hand.
+SYSTEM = system_prompt(walking=False)
+
+
 @dataclass(frozen=True)
 class ReviewResult:
     ok: bool
@@ -123,12 +158,19 @@ class ReviewResult:
     unreviewed: bool = False
 
 
-def review_outbound(candidate: str, *, recent: list[str]) -> ReviewResult:
+def review_outbound(
+    candidate: str, *, recent: list[str], walking: bool = False
+) -> ReviewResult:
     """Second-pass check on one generated message.
 
     ``recent`` is the tail of the conversation, oldest first, each line already
     prefixed with who said it. It exists so the reviewer can see a distressed
     player, which is invisible in the candidate alone.
+
+    ``walking`` switches which reading of "unsafe" applies. A reviewer holding
+    the sit-down rules would refuse every message a walking arc exists to
+    send, and a reviewer holding the walking rules on a sit-down arc would let
+    through an instruction to go out that nothing in that story should produce.
     """
     transcript = "\n".join(recent[-8:]) or "(no messages yet)"
     user = (
@@ -141,7 +183,7 @@ def review_outbound(candidate: str, *, recent: list[str]) -> ReviewResult:
 
     try:
         verdict = model.judge(
-            system=SYSTEM,
+            system=system_prompt(walking=walking),
             messages=[{"role": "user", "content": user}],
             tool=VERDICT_TOOL,
         )

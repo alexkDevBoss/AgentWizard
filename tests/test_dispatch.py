@@ -235,3 +235,43 @@ def test_later_messages_that_day_do_not_repeat_it(player, telegram, frozen) -> N
     dispatch.send_to_player(player, "first")
     dispatch.send_to_player(player, "second")
     assert telegram.texts[1] == "second"
+
+
+# --------------------------------------------------- where the cap comes from
+
+
+def test_the_daily_cap_defaults_to_the_product_rule(monkeypatch) -> None:
+    """Six is the rule. An unset environment must never mean 'unlimited'."""
+    import importlib
+
+    monkeypatch.delenv("ADVENTURE_MAX_MESSAGES_PER_DAY", raising=False)
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.MAX_STORY_MESSAGES_PER_DAY == 6
+    finally:
+        importlib.reload(config)
+
+
+def test_the_daily_cap_can_be_raised_for_a_walking_arc(monkeypatch) -> None:
+    """A five-stop walk needs more than six messages to finish in one day."""
+    import importlib
+
+    monkeypatch.setenv("ADVENTURE_MAX_MESSAGES_PER_DAY", "200")
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.MAX_STORY_MESSAGES_PER_DAY == 200
+    finally:
+        monkeypatch.delenv("ADVENTURE_MAX_MESSAGES_PER_DAY", raising=False)
+        importlib.reload(config)
+
+
+def test_a_junk_cap_is_not_silently_treated_as_unlimited(monkeypatch) -> None:
+    import importlib
+
+    monkeypatch.setenv("ADVENTURE_MAX_MESSAGES_PER_DAY", "")
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.MAX_STORY_MESSAGES_PER_DAY == 6
+    finally:
+        monkeypatch.delenv("ADVENTURE_MAX_MESSAGES_PER_DAY", raising=False)
+        importlib.reload(config)
