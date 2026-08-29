@@ -65,7 +65,7 @@ def test_the_default_arc_uses_the_channels_the_spec_allows() -> None:
 def test_the_beat_for_a_day_is_clamped_to_the_arc(day, expected) -> None:
     """A player who goes quiet for a fortnight gets the last beat, not a crash."""
     arc = parse_arc(MINIMAL)
-    assert arc.beat_for_day(day).beat_id == expected
+    assert arc.beat_at(day).beat_id == expected
 
 
 # ------------------------------------------------------------- validation
@@ -90,23 +90,29 @@ def test_duplicate_beat_ids_are_rejected() -> None:
         parse_arc(variant(beats=beats))
 
 
-def test_beats_out_of_day_order_are_rejected() -> None:
+def test_beats_out_of_order_are_rejected() -> None:
     beats = [
         {"beat_id": "d2", "day": 2, "title": "Two", "goal": "g"},
         {"beat_id": "d1", "day": 1, "title": "One", "goal": "g"},
     ]
-    with pytest.raises(ArcError, match="day order"):
+    with pytest.raises(ArcError, match="out of order"):
         parse_arc(variant(beats=beats))
 
 
-def test_a_day_missing_from_the_middle_is_rejected() -> None:
+def test_a_gap_in_the_numbering_is_rejected() -> None:
     """Otherwise day 2 silently plays day 3's beat for the rest of the week."""
     beats = [
         {"beat_id": "d1", "day": 1, "title": "One", "goal": "g"},
         {"beat_id": "d3", "day": 3, "title": "Three", "goal": "g"},
     ]
-    with pytest.raises(ArcError, match="runs 2 days"):
+    with pytest.raises(ArcError, match="numbered 1..n"):
         parse_arc(variant(beats=beats, duration_days=2))
+
+
+def test_a_seven_day_arc_with_only_two_beats_is_rejected() -> None:
+    """The duration and the beats have to agree, or the last five days are silent."""
+    with pytest.raises(ArcError, match="runs 7 days"):
+        parse_arc(variant(duration_days=7))
 
 
 def test_a_beat_missing_a_goal_is_rejected() -> None:

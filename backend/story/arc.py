@@ -1,34 +1,77 @@
 """Arc definitions: the story as data, not as code.
 
-An arc is a YAML file in ``backend/story/arcs/``. It carries the premise, the
-characters and their voices, and one beat per day of the run. Nothing in it is
-executable and nothing in it is a safety control -- the rules in
-:mod:`backend.core.safety` and :mod:`backend.core.validation` apply to every
-arc regardless of what its text says, and an arc that asked for something
-forbidden would simply have its messages refused.
+There are two shapes of arc, and the difference is only *what makes the story
+move on*:
 
-**The current beat is a function of elapsed days, not a model judgement.**
-Asking the model "is this beat finished?" makes the story's shape depend on
-the thing least able to be held to it: a stuck beat repeats forever and a
-runaway one burns the whole arc in an afternoon. Days are the one axis the
-player and the operator both already understand, and the same arithmetic tells
-the scheduler which beat to open tomorrow morning.
+``days``
+    One beat per calendar day, as in the seven-day ``nightjar`` arc. The
+    current beat is arithmetic over player-local days -- see
+    :func:`backend.core.clock.arc_day`.
+
+``stages``
+    One beat per place, for a single-day walking adventure. The current beat is
+    a stored pointer that only moves when the player does something the system
+    can *verify*: standing inside a geofence, or sending a photograph.
+
+Neither kind ever asks the model how the story is going. A model that can talk
+itself into "the arc is finished" is a model that can end someone's day early,
+and one that can talk itself into "they've arrived" is worse -- it would move
+the story on while the player is still standing in the wrong street.
+
+A ``days`` arc is a static YAML file in ``arcs/``. A ``stages`` arc is
+generated per player from where they actually are, so it lives in DynamoDB
+rather than in the repo; both go through :func:`parse_arc`, and both are
+validated the same way.
+
+Nothing in an arc is a safety control. The rules in
+:mod:`backend.core.safety` and :mod:`backend.core.validation` apply whatever an
+arc file says, and an arc asking for something forbidden would simply have its
+messages refused.
 """
 
 from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from backend.core.geo import DEFAULT_FENCE_M, Point, clamp_fence
+from backend.core.places import Waypoint
+
 ARCS_DIR = Path(__file__).parent / "arcs"
 
 
 class ArcError(ValueError):
-    """An arc file is missing, unreadable, or internally inconsistent."""
+    """An arc is missing, unreadable, or internally inconsistent."""
+
+
+class ArcKind(StrEnum):
+    DAYS = "days"
+    STAGES = "stages"
+
+
+class Advance(StrEnum):
+    """What moves the story past a beat.
+
+    Every value except :attr:`REPLY` is verified by the system rather than
+    judged: a day has rolled over, a coordinate is inside a fence, a photo
+    arrived, or a human pressed the button.
+    """
+
+    #: The player-local calendar day changed. ``days`` arcs only.
+    DAY = "day"
+    #: The player's location was inside this beat's geofence.
+    ARRIVAL = "arrival"
+    #: The player sent a photograph while on this beat.
+    PHOTO = "photo"
+    #: Any reply at all. For talky beats with nowhere to walk to.
+    REPLY = "reply"
+    #: Only the operator, from the console. Used for the final beat.
+    OPERATOR = "operator"
 
 
 @dataclass(frozen=True)
@@ -43,23 +86,76 @@ class Character:
 
 @dataclass(frozen=True)
 class Beat:
-    """One day of the arc."""
+    """One step of the arc: a day in a ``days`` arc, a place in a ``stages`` one."""
 
     beat_id: str
-    day: int
+    #: 1-based position. In a ``days`` arc this *is* the day number.
+    order: int
     title: str
-    #: What this day is for, in the second person, addressed to the writer.
+    #: What this beat is for, addressed to the writer.
     goal: str
-    #: The proactive message that opens the day. Written as direction, not as
-    #: copy to send verbatim -- the model still writes the actual words.
+    advance_on: Advance = Advance.REPLY
+    #: The proactive message that opens the beat, as direction rather than copy.
     opens_with: str = ""
-    #: What the player is likely to do, so the writer can anticipate it.
     player_may: str = ""
-    #: Which channel this beat's proactive contact uses.
     channel: str = "telegram"
+    #: Where the player is being sent. ``stages`` arcs only.
+    waypoint: Waypoint | None = None
+    #: How the character points them there, in words, without coordinates.
+    hint: str = ""
+
+    @property
+    def day(self) -> int:
+        """Alias kept for ``days`` arcs, where order and day are the same thing."""
+        return self.order
+
+    @property
+    def fence_m(self) -> float:
+        return clamp_fence(self.waypoint.fence_m if self.waypoint else DEFAULT_FENCE_M)
+
+    @property
+    def target(self) -> Point | None:
+        return self.waypoint.point if self.waypoint else None
+
+    @property
+    def requirement(self) -> str:
+        """What the player must actually do here, spelled out for the writer.
+
+        Without this the writer asks for whatever suits the sentence -- a photo
+        at a stage that is waiting for an arrival, say -- and the player does
+        it, nothing happens, and they are stuck being asked again for something
+        that was never the gate.
+        """
+        match self.advance_on:
+            case Advance.ARRIVAL:
+                return (
+                    "This step ends ONLY when they share their location from "
+                    "the place. Ask them for it in your own words, and say how: "
+                    "the paperclip or attachment button in Telegram, then "
+                    "Location. Do not ask for a photograph here -- a photo will "
+                    "not move the story on and they will think they are stuck."
+                )
+            case Advance.PHOTO:
+                return (
+                    "This step ends ONLY when they send a photograph from the "
+                    "place. Ask for the picture. Do not ask them to share their "
+                    "location here -- it will not move the story on."
+                )
+            case Advance.OPERATOR:
+                return (
+                    "This is the last step. Nothing they send ends it, so ask "
+                    "for nothing they have to go and do."
+                )
+            case _:
+                return "This step moves on when they reply."
 
     def render(self) -> str:
-        lines = [f"Day {self.day} -- {self.title}", f"Purpose: {self.goal}"]
+        lines = [f"Step {self.order} -- {self.title}", f"Purpose: {self.goal}"]
+        if self.waypoint:
+            lines.append(f"Where they are going: {self.waypoint.render()}")
+            if self.hint:
+                lines.append(f"How to point them there: {self.hint}")
+            lines.append(f"How this step ends: {self.requirement}")
         if self.player_may:
             lines.append(f"The player may: {self.player_may}")
         return "\n".join(lines)
@@ -70,33 +166,87 @@ class Arc:
     arc_id: str
     title: str
     premise: str
-    #: How the story addresses the player and what it must never claim.
     tone: str
     characters: tuple[Character, ...]
     beats: tuple[Beat, ...]
-    #: Kept as a field rather than derived from len(beats) so a malformed file
-    #: fails validation instead of silently running a shorter arc.
+    kind: ArcKind = ArcKind.DAYS
+    #: Kept as a field rather than derived from len(beats) so a malformed arc
+    #: fails validation instead of silently running short.
     duration_days: int = 7
     notes: str = field(default="")
 
-    def beat_for_day(self, day: int) -> Beat:
-        """The beat for a given 1-based day, clamped to the arc's range.
+    @property
+    def is_walk(self) -> bool:
+        return self.kind is ArcKind.STAGES
+
+    @property
+    def length(self) -> int:
+        return len(self.beats)
+
+    def beat_at(self, order: int) -> Beat:
+        """The beat at a 1-based position, clamped to the arc.
 
         Clamping rather than raising is deliberate: a player who goes quiet for
         a fortnight and then answers should get the last beat, not an error.
         """
-        clamped = max(1, min(day, self.duration_days))
+        clamped = max(1, min(order, self.length))
         for beat in self.beats:
-            if beat.day == clamped:
+            if beat.order == clamped:
                 return beat
         return self.beats[-1]
+
+    #: Kept as the name the day-based path reads, so that call site says what
+    #: it means rather than passing a day into something called `beat_at`.
+    beat_for_day = beat_at
 
     def beat(self, beat_id: str) -> Beat | None:
         return next((b for b in self.beats if b.beat_id == beat_id), None)
 
+    def index_of(self, beat_id: str) -> int | None:
+        beat = self.beat(beat_id)
+        return beat.order if beat else None
+
     @property
     def cast(self) -> str:
         return "\n".join(c.render() for c in self.characters)
+
+    @property
+    def route(self) -> str:
+        """The walk, in order, for a prompt. Names only -- never coordinates."""
+        return "\n".join(
+            f"{b.order}. {b.waypoint.render()}" for b in self.beats if b.waypoint
+        )
+
+    def to_item(self) -> dict[str, Any]:
+        """Serialise for DynamoDB. Round-trips through :func:`parse_arc`."""
+        return {
+            "arc_id": self.arc_id,
+            "kind": str(self.kind),
+            "title": self.title,
+            "premise": self.premise,
+            "tone": self.tone,
+            "duration_days": self.duration_days,
+            "notes": self.notes,
+            "characters": [
+                {"name": c.name, "role": c.role, "voice": c.voice}
+                for c in self.characters
+            ],
+            "beats": [
+                {
+                    "beat_id": b.beat_id,
+                    "order": b.order,
+                    "title": b.title,
+                    "goal": b.goal,
+                    "advance_on": str(b.advance_on),
+                    "opens_with": b.opens_with,
+                    "player_may": b.player_may,
+                    "channel": b.channel,
+                    "hint": b.hint,
+                    "waypoint": b.waypoint.to_item() if b.waypoint else None,
+                }
+                for b in self.beats
+            ],
+        }
 
 
 def _require(data: dict[str, Any], key: str, where: str) -> Any:
@@ -105,8 +255,25 @@ def _require(data: dict[str, Any], key: str, where: str) -> Any:
     return data[key]
 
 
+def _parse_waypoint(data: dict[str, Any] | None, where: str) -> Waypoint | None:
+    if not data:
+        return None
+    try:
+        return Waypoint(
+            osm_id=str(data.get("osm_id") or "unknown"),
+            name=_require(data, "name", where),
+            kind=str(data.get("kind") or "place"),
+            lat=float(_require(data, "lat", where)),
+            lon=float(_require(data, "lon", where)),
+            fence_m=int(data.get("fence_m") or DEFAULT_FENCE_M),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ArcError(f"{where}: unusable waypoint -- {exc}") from exc
+
+
 def parse_arc(data: dict[str, Any], *, source: str = "<dict>") -> Arc:
     arc_id = _require(data, "arc_id", source)
+    kind = ArcKind(str(data.get("kind") or ArcKind.DAYS))
 
     characters = tuple(
         Character(
@@ -119,31 +286,53 @@ def parse_arc(data: dict[str, Any], *, source: str = "<dict>") -> Arc:
     if not characters:
         raise ArcError(f"{source}: arc has no characters")
 
-    beats = tuple(
-        Beat(
-            beat_id=_require(b, "beat_id", f"{source}: beat"),
-            day=int(_require(b, "day", f"{source}: beat")),
-            title=_require(b, "title", f"{source}: beat"),
-            goal=_require(b, "goal", f"{source}: beat"),
-            opens_with=(b.get("opens_with") or "").strip(),
-            player_may=(b.get("player_may") or "").strip(),
-            channel=(b.get("channel") or "telegram").strip(),
+    beats = []
+    for raw in data.get("beats") or []:
+        where = f"{source}: beat"
+        # `day` reads better than `order` in a hand-written seven-day arc, and
+        # in that arc they are the same number.
+        order = raw.get("order", raw.get("day"))
+        if order in (None, ""):
+            raise ArcError(f"{where}: missing required key 'order'")
+        try:
+            advance = Advance(
+                str(
+                    raw.get("advance_on")
+                    or (Advance.DAY if kind is ArcKind.DAYS else Advance.REPLY)
+                )
+            )
+        except ValueError as exc:
+            raise ArcError(
+                f"{where}: unknown advance_on {raw.get('advance_on')!r}"
+            ) from exc
+
+        beats.append(
+            Beat(
+                beat_id=_require(raw, "beat_id", where),
+                order=int(order),
+                title=_require(raw, "title", where),
+                goal=_require(raw, "goal", where),
+                advance_on=advance,
+                opens_with=(raw.get("opens_with") or "").strip(),
+                player_may=(raw.get("player_may") or "").strip(),
+                channel=(raw.get("channel") or "telegram").strip(),
+                hint=(raw.get("hint") or "").strip(),
+                waypoint=_parse_waypoint(raw.get("waypoint"), where),
+            )
         )
-        for b in data.get("beats") or []
-    )
     if not beats:
         raise ArcError(f"{source}: arc has no beats")
 
-    duration = int(data.get("duration_days") or len(beats))
-
+    default_days = len(beats) if kind is ArcKind.DAYS else 1
     arc = Arc(
         arc_id=arc_id,
         title=_require(data, "title", source),
         premise=_require(data, "premise", source).strip(),
         tone=_require(data, "tone", source).strip(),
         characters=characters,
-        beats=beats,
-        duration_days=duration,
+        beats=tuple(beats),
+        kind=kind,
+        duration_days=int(data.get("duration_days") or default_days),
         notes=(data.get("notes") or "").strip(),
     )
     _validate(arc, source)
@@ -151,27 +340,52 @@ def parse_arc(data: dict[str, Any], *, source: str = "<dict>") -> Arc:
 
 
 def _validate(arc: Arc, source: str) -> None:
-    """Catch the mistakes that would otherwise surface mid-run, in front of a player."""
+    """Catch the mistakes that would otherwise surface in front of a player."""
     ids = [b.beat_id for b in arc.beats]
     if len(set(ids)) != len(ids):
         raise ArcError(f"{source}: duplicate beat_id")
 
-    days = [b.day for b in arc.beats]
-    if days != sorted(days):
-        raise ArcError(f"{source}: beats are not in day order: {days}")
-    if len(set(days)) != len(days):
-        raise ArcError(f"{source}: two beats share a day: {days}")
+    orders = [b.order for b in arc.beats]
+    if orders != sorted(orders):
+        raise ArcError(f"{source}: beats are out of order: {orders}")
+    if orders != list(range(1, len(orders) + 1)):
+        raise ArcError(f"{source}: beats must be numbered 1..n, got {orders}")
 
-    expected = list(range(1, arc.duration_days + 1))
-    if days != expected:
+    if arc.kind is ArcKind.DAYS:
+        if orders != list(range(1, arc.duration_days + 1)):
+            raise ArcError(
+                f"{source}: arc runs {arc.duration_days} days "
+                f"but has beats for {orders}"
+            )
+        return
+
+    # --- stages ---------------------------------------------------------
+    if arc.duration_days != 1:
+        raise ArcError(f"{source}: a stages arc is one day, not {arc.duration_days}")
+
+    for beat in arc.beats:
+        if beat.advance_on is Advance.DAY:
+            raise ArcError(
+                f"{source}: beat {beat.beat_id!r} advances on 'day' in a stages arc"
+            )
+        if beat.advance_on is Advance.ARRIVAL and beat.waypoint is None:
+            raise ArcError(
+                f"{source}: beat {beat.beat_id!r} waits for an arrival "
+                "but has no waypoint to arrive at"
+            )
+
+    if arc.beats[-1].advance_on is not Advance.OPERATOR:
+        # Otherwise the last beat "completes" and the player is left on an arc
+        # that has run out, with nothing to say and no one watching.
         raise ArcError(
-            f"{source}: arc runs {arc.duration_days} days but has beats for {days}"
+            f"{source}: the last beat must advance_on 'operator', "
+            f"not {arc.beats[-1].advance_on!r}"
         )
 
 
 @functools.lru_cache(maxsize=8)
 def load_arc(arc_id: str) -> Arc:
-    """Read and validate one arc. Cached -- arcs are static files."""
+    """Read and validate one arc file. Cached -- these are static."""
     path = ARCS_DIR / f"{arc_id}.yaml"
     if not path.is_file():
         raise ArcError(f"no arc named {arc_id!r} in {ARCS_DIR}")

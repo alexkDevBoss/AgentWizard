@@ -2,6 +2,7 @@
 """Operator CLI for players.
 
     python scripts/player.py add --name "Alex" --tz Europe/London
+    python scripts/player.py compose plr_xxx --at 32.0640,34.7740
     python scripts/player.py list
     python scripts/player.py show plr_xxx
     python scripts/player.py stop plr_xxx --reason "operator call"
@@ -121,6 +122,63 @@ def _control(args, action: str) -> int:
     return 0
 
 
+def cmd_compose(args) -> int:
+    """Build a one-day walking arc around a real location and store it.
+
+    Until the onboarding site exists, this is how a customer's start location
+    becomes an adventure. The location is used to search and then dropped --
+    what is stored against the player is a list of public places, never where
+    they were standing.
+    """
+    from backend.core import arcsmith, store
+    from backend.core.geo import Point
+
+    player = store.get_player(args.player_id)
+    if player is None:
+        print(f"no such player: {args.player_id}", file=sys.stderr)
+        return 1
+
+    try:
+        lat, lon = (float(part) for part in args.at.split(","))
+        origin = Point(lat, lon)
+    except ValueError as exc:
+        print(f"--at wants 'lat,lon' -- {exc}", file=sys.stderr)
+        return 1
+
+    print(f"composing a walk near {args.at} for {player.display_name}...")
+    try:
+        draft = arcsmith.compose(
+            origin, player_name=player.display_name, theme=args.theme or ""
+        )
+    except arcsmith.ArcGenerationFailed as exc:
+        print(f"could not compose an arc: {exc}", file=sys.stderr)
+        return 1
+
+    arc = draft.arc
+    print()
+    print(f"  {arc.title}   [{arc.arc_id}]")
+    print(f"  {arc.length} stops, {draft.route_m:.0f}m of walking")
+    print()
+    for beat in arc.beats:
+        waits = {"arrival": "arrive", "photo": "photograph", "operator": "you end it"}
+        print(
+            f"  {beat.order}. {beat.waypoint.name}"
+            f"  [{waits.get(str(beat.advance_on), beat.advance_on)}]"
+        )
+    print()
+
+    if not args.yes and not confirm("Store this arc for the player?"):
+        print("not stored. Run again for a different one.")
+        return 1
+
+    store.put_arc(player.player_id, arc.to_item())
+    store.set_beat_order(player.player_id, 1)
+    player.arc_id = arc.arc_id
+    store.put_player(player)
+    print(f"stored. {player.display_name} is on step 1 of {arc.length}.")
+    return 0
+
+
 def cmd_delete(args) -> int:
     from backend.core import store
 
@@ -151,6 +209,17 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--tz", default="UTC", help="IANA timezone, e.g. Europe/London")
     add.add_argument("--notes", default=None)
     add.set_defaults(func=cmd_add)
+
+    compose = sub.add_parser(
+        "compose", help="build a one-day walking arc around a real location"
+    )
+    compose.add_argument("player_id")
+    compose.add_argument(
+        "--at", required=True, help="starting point as 'lat,lon' (decimal degrees)"
+    )
+    compose.add_argument("--theme", help="what the customer asked for, if anything")
+    compose.add_argument("--yes", action="store_true", help="store without confirming")
+    compose.set_defaults(func=cmd_compose)
 
     listing = sub.add_parser("list", help="list every player")
     listing.set_defaults(func=cmd_list)
