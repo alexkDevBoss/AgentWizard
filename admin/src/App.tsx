@@ -13,12 +13,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "oidc-client-ts";
 import { Api, ApiError } from "./api";
 import { initAuth, resolveUser, signIn, signOut } from "./auth";
+import { ArcSheet } from "./components/ArcSheet";
 import { Composer } from "./components/Composer";
 import { NewPlayer } from "./components/NewPlayer";
 import { PlayerHeader } from "./components/PlayerHeader";
 import { Roster } from "./components/Roster";
 import { Timeline } from "./components/Timeline";
-import type { AppConfig, Player, TimelineEvent } from "./types";
+import type { AppConfig, Arc, Player, TimelineEvent } from "./types";
 
 const REFRESH_MS = 5000;
 
@@ -36,6 +37,8 @@ export function App({ config }: { config: AppConfig }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [arc, setArc] = useState<Arc | null>(null);
+  const [editingArc, setEditingArc] = useState(false);
 
   const spineRef = useRef<HTMLDivElement>(null);
   const lastEventKey = useRef<string>("");
@@ -102,6 +105,24 @@ export function App({ config }: { config: AppConfig }) {
     return () => {
       live = false;
       clearInterval(timer);
+    };
+  }, [api, user, selectedId, handle]);
+
+  // The arc is fetched once per player rather than on the five-second poll:
+  // it only changes when this console changes it, and re-reading it every tick
+  // would fight the editor for the same state.
+  useEffect(() => {
+    if (!user || !selectedId) {
+      setArc(null);
+      return;
+    }
+    let live = true;
+    api
+      .arc(selectedId)
+      .then((result) => live && setArc(result ? result.arc : null))
+      .catch(handle);
+    return () => {
+      live = false;
     };
   }, [api, user, selectedId, handle]);
 
@@ -207,9 +228,11 @@ export function App({ config }: { config: AppConfig }) {
           <>
             <PlayerHeader
               player={detail.player}
+              arc={arc}
               busy={busy}
               onControl={(a) => void control(a)}
               onDelete={() => void remove()}
+              onArc={() => setEditingArc(true)}
             />
             <div className="spine" ref={spineRef}>
               <Timeline player={detail.player} events={detail.timeline} />
@@ -236,6 +259,29 @@ export function App({ config }: { config: AppConfig }) {
           </div>
         )}
       </main>
+
+      {editingArc && detail && (
+        <ArcSheet
+          playerName={detail.player.display_name}
+          arc={arc}
+          beatOrder={detail.player.beat_order}
+          onClose={() => setEditingArc(false)}
+          onCompose={async (at, theme) =>
+            (await api.composeArc(detail.player.player_id, at, theme)).job_id
+          }
+          onPoll={(jobId) => api.arcJob(detail.player.player_id, jobId)}
+          onPlaces={(at) => api.nearbyPlaces(detail.player.player_id, at)}
+          onSave={async (next, restart) => {
+            const saved = await api.saveArc(
+              detail.player.player_id,
+              next,
+              restart,
+            );
+            setArc(saved.arc);
+            await withRefresh(async () => undefined);
+          }}
+        />
+      )}
 
       {adding && (
         <NewPlayer

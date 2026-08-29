@@ -19,6 +19,7 @@ from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack
 from aws_cdk import aws_apigatewayv2 as apigw
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_dynamodb as dynamodb
+from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as cwlogs
 from aws_cdk import aws_secretsmanager as secretsmanager
@@ -30,8 +31,9 @@ from infra.bundling import build_lambda_asset
 from infra.config import EnvConfig
 
 #: Every route the console can call. Declared here so the surface is auditable
-#: in one place rather than scattered across the handler.
-ROUTES: tuple[tuple[apigw.HttpMethod, str], ...] = (
+#: in one place rather than scattered across the handler -- and so the API's
+#: CORS rules can be derived from it instead of drifting behind it.
+ADMIN_ROUTES: tuple[tuple[apigw.HttpMethod, str], ...] = (
     (apigw.HttpMethod.GET, "/admin/me"),
     (apigw.HttpMethod.GET, "/admin/players"),
     (apigw.HttpMethod.POST, "/admin/players"),
@@ -42,6 +44,11 @@ ROUTES: tuple[tuple[apigw.HttpMethod, str], ...] = (
     (apigw.HttpMethod.POST, "/admin/players/{player_id}/stop"),
     (apigw.HttpMethod.POST, "/admin/players/{player_id}/pause"),
     (apigw.HttpMethod.POST, "/admin/players/{player_id}/resume"),
+    (apigw.HttpMethod.POST, "/admin/players/{player_id}/arc/compose"),
+    (apigw.HttpMethod.GET, "/admin/players/{player_id}/arc/jobs/{job_id}"),
+    (apigw.HttpMethod.GET, "/admin/players/{player_id}/arc"),
+    (apigw.HttpMethod.PUT, "/admin/players/{player_id}/arc"),
+    (apigw.HttpMethod.GET, "/admin/players/{player_id}/places"),
 )
 
 #: Where the console may be loaded from during development.
@@ -184,11 +191,86 @@ class AdminApi(Construct):
                 "ADVENTURE_TABLE_NAME": table.table_name,
                 "ADVENTURE_SECRET_NAME": self.cfg.secret_name,
                 "ADVENTURE_ENV": self.cfg.name,
+                "ADVENTURE_MAX_MESSAGES_PER_DAY": str(self.cfg.max_messages_per_day),
                 "ADVENTURE_LOG_LEVEL": "INFO",
             },
         )
         table.grant_read_write_data(function)
         secret.grant_read(function)
+
+        # Composing an arc takes 25-35s against Bedrock and API Gateway hangs
+        # up at 30, so the API cannot do that work itself. It starts a job and
+        # hands it to a second function instead.
+        self.composer = self._make_composer(table, secret)
+        self.composer.grant_invoke(function)
+        function.add_environment(
+            "ADVENTURE_COMPOSER_FUNCTION", self.composer.function_name
+        )
+        return function
+
+    def _make_composer(
+        self, table: dynamodb.TableV2, secret: secretsmanager.Secret
+    ) -> lambda_.Function:
+        """The background arc writer. Invoked asynchronously, never by the API.
+
+        It is a separate function rather than a longer timeout on the admin
+        API because this account's *total* Lambda concurrency is 10. A
+        two-minute timeout on the function the console talks to would let a few
+        slow composes hold most of the account's capacity, and the Telegram
+        webhook shares that pool.
+        """
+        log_group = cwlogs.LogGroup(
+            self,
+            "ComposerLogs",
+            log_group_name=f"/aws/lambda/{self.cfg.prefix}-arc-composer",
+            retention=(
+                cwlogs.RetentionDays.ONE_MONTH
+                if self.cfg.retain_data
+                else cwlogs.RetentionDays.ONE_WEEK
+            ),
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        function = lambda_.Function(
+            self,
+            "ArcComposer",
+            function_name=f"{self.cfg.prefix}-arc-composer",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            architecture=lambda_.Architecture.X86_64,
+            handler="backend.handlers.arc_composer.handler",
+            code=lambda_.Code.from_asset(build_lambda_asset()),
+            # Measured: Overpass 2-5s plus 25-35s of writing. Three minutes
+            # leaves room for a slow day without ever wedging on a hung call.
+            timeout=Duration.minutes(3),
+            memory_size=512,
+            # Nothing retries a failed compose: the operator is watching a
+            # progress spinner and would rather be told it failed than wait
+            # through two more attempts of the same thing.
+            retry_attempts=0,
+            log_group=log_group,
+            environment={
+                "ADVENTURE_TABLE_NAME": table.table_name,
+                "ADVENTURE_SECRET_NAME": self.cfg.secret_name,
+                "ADVENTURE_ENV": self.cfg.name,
+                "ADVENTURE_MAX_MESSAGES_PER_DAY": str(self.cfg.max_messages_per_day),
+                "ADVENTURE_LOG_LEVEL": "INFO",
+            },
+        )
+        table.grant_read_write_data(function)
+        secret.grant_read(function)
+        function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                ],
+                resources=[
+                    f"arn:aws:bedrock:*:{Stack.of(self).account}"
+                    ":inference-profile/us.anthropic.*",
+                    "arn:aws:bedrock:*::foundation-model/anthropic.*",
+                ],
+            )
+        )
         return function
 
     # --------------------------------------------------------------- wiring
@@ -202,7 +284,7 @@ class AdminApi(Construct):
         )
         integration = HttpLambdaIntegration("AdminIntegration", self.function)
 
-        for method, path in ROUTES:
+        for method, path in ADMIN_ROUTES:
             api.add_routes(
                 path=path,
                 methods=[method],

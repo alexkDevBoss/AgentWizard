@@ -92,6 +92,7 @@ class TelegramApi(Construct):
                 "ADVENTURE_ENV": cfg.name,
                 "ADVENTURE_OPERATOR_NAME": operator_name,
                 "ADVENTURE_OPERATOR_CONTACT": operator_contact,
+                "ADVENTURE_MAX_MESSAGES_PER_DAY": str(cfg.max_messages_per_day),
                 "ADVENTURE_LOG_LEVEL": "INFO",
             },
         )

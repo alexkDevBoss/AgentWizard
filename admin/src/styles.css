@@ -795,3 +795,141 @@ button {
     transition: none !important;
   }
 }
+
+/* ---------------------------------------------------------------- the arc
+ *
+ * The editor is a wide sheet rather than another column: composing or
+ * rewriting an adventure is a sit-down job, not something done at a glance
+ * beside a live timeline.
+ */
+
+.sheet--wide {
+  width: min(880px, 94vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.arc__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.arc__route {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--chalk-dim);
+  letter-spacing: 0.03em;
+}
+
+/* The one number that decides whether a real person can walk this. */
+.arc__route--over {
+  color: var(--halt);
+}
+
+.arc__lede {
+  color: var(--chalk-dim);
+  margin: 6px 0 14px;
+  max-width: 62ch;
+}
+
+.arc__note {
+  display: block;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--chalk-faint);
+  margin-top: 6px;
+  max-width: 70ch;
+}
+
+.arc__waiting {
+  border: 1px dashed var(--rule);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin: 14px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--hold);
+}
+
+.arc__body {
+  overflow-y: auto;
+  margin: 10px -4px 0;
+  padding: 0 4px;
+}
+
+.arc__stops {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stop {
+  border: 1px solid var(--rule-soft);
+  border-radius: 6px;
+  padding: 12px 14px 4px;
+  background: var(--ink);
+}
+
+/* Where the player is standing right now. */
+.stop--here {
+  border-color: var(--live);
+}
+
+.stop__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.stop__n {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--chalk-faint);
+  width: 16px;
+  flex: none;
+}
+
+.stop__title {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--chalk);
+  font: inherit;
+  font-weight: 600;
+  padding: 4px 6px;
+}
+
+.stop__title:hover {
+  border-color: var(--rule-soft);
+}
+
+.stop__title:focus {
+  border-color: var(--rule);
+  outline: none;
+  background: var(--slate);
+}
+
+.field textarea {
+  background: var(--slate);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  color: var(--chalk);
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.field textarea:focus {
+  outline: none;
+  border-color: var(--chalk-faint);
+}

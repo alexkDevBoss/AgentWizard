@@ -43,7 +43,7 @@ from infra.config import (
     operator_contact,
     operator_name,
 )
-from infra.stacks.admin_api import LOCAL_DEV_ORIGIN, AdminApi
+from infra.stacks.admin_api import ADMIN_ROUTES, LOCAL_DEV_ORIGIN, AdminApi
 from infra.stacks.admin_site import AdminSite
 from infra.stacks.telegram_api import TelegramApi
 
@@ -62,6 +62,20 @@ SECRET_TEMPLATE_KEYS = {
     "twilio_phone_number": "",
     "ses_from_address": "",
 }
+
+
+def _cors_methods() -> list[apigw.CorsHttpMethod]:
+    """Every verb the console actually uses, plus the preflight itself.
+
+    Routes are declared with ``HttpMethod`` and CORS wants ``CorsHttpMethod``
+    -- two enums with the same member names that CDK will not convert between,
+    so they are matched by name here.
+    """
+    used = {
+        getattr(apigw.CorsHttpMethod, method.name) for method, _path in ADMIN_ROUTES
+    }
+    used.add(apigw.CorsHttpMethod.OPTIONS)
+    return sorted(used, key=lambda m: m.value)
 
 
 class AdventureAgentStack(Stack):
@@ -138,12 +152,12 @@ class AdventureAgentStack(Stack):
             cors_preflight=apigw.CorsPreflightOptions(
                 allow_origins=[console_url, LOCAL_DEV_ORIGIN],
                 allow_headers=["authorization", "content-type"],
-                allow_methods=[
-                    apigw.CorsHttpMethod.GET,
-                    apigw.CorsHttpMethod.POST,
-                    apigw.CorsHttpMethod.DELETE,
-                    apigw.CorsHttpMethod.OPTIONS,
-                ],
+                # Derived from the routes rather than listed by hand. Written
+                # out, this list silently falls behind: adding a PUT route for
+                # saving an edited arc left the browser refusing the preflight
+                # with "Failed to fetch", which looks like a server fault and
+                # is not one.
+                allow_methods=_cors_methods(),
                 max_age=Duration.hours(1),
             ),
         )

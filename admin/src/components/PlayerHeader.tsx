@@ -5,19 +5,23 @@
  * player is paused, stop is dead once they are stopped. A control that cannot
  * work should say so before it is pressed.
  */
-import type { Player } from "../types";
+import type { Arc, Player } from "../types";
 import { clockAt, inQuietHours, since } from "../time";
 
 export function PlayerHeader({
   player,
+  arc,
   busy,
   onControl,
   onDelete,
+  onArc,
 }: {
   player: Player;
+  arc: Arc | null;
   busy: boolean;
   onControl: (action: "stop" | "pause" | "resume") => void;
   onDelete: () => void;
+  onArc: () => void;
 }) {
   const quiet = inQuietHours(new Date().toISOString(), player.timezone);
   const stopped = player.status === "STOPPED";
@@ -44,11 +48,20 @@ export function PlayerHeader({
               code <b className="code">{player.enrolment_code}</b>
             </span>
           )}
+          {arc?.kind === "stages" && (
+            <span>
+              stop <b>{player.beat_order}</b>/{arc.beats.length} ·{" "}
+              {arc.beats[player.beat_order - 1]?.waypoint?.name ?? "—"}
+            </span>
+          )}
           {stopped && player.stop_reason && <span>{player.stop_reason}</span>}
         </div>
       </div>
 
       <div className="head__actions">
+        <button className="act" disabled={busy} onClick={onArc}>
+          {arc ? "Edit adventure" : "Compose adventure"}
+        </button>
         <button
           className="act"
           disabled={busy || stopped || player.status !== "ACTIVE"}

@@ -5,7 +5,15 @@
  * mid-shift; the caller sends the operator back to sign-in rather than showing
  * a stale console.
  */
-import type { AppConfig, Player, PlayerDetail, SendResult } from "./types";
+import type {
+  AppConfig,
+  Arc,
+  ArcJob,
+  Player,
+  PlayerDetail,
+  SendResult,
+  Waypoint,
+} from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -89,6 +97,45 @@ export class Api {
       `/admin/players/${id}/${action}`,
       { method: "POST", body: JSON.stringify(reason ? { reason } : {}) },
     );
+
+  /**
+   * Start composing an arc. Answers 202 immediately with a job id.
+   *
+   * Composing takes 25-35 seconds against Bedrock and API Gateway hangs up at
+   * 30, so this cannot be a normal request-response. Poll `arcJob`.
+   */
+  composeArc = (id: string, at: string, theme?: string) =>
+    this.call<{ job_id: string; status: string }>(
+      `/admin/players/${id}/arc/compose`,
+      { method: "POST", body: JSON.stringify({ at, theme }) },
+      [202],
+    );
+
+  arcJob = (id: string, jobId: string) =>
+    this.call<{ job: ArcJob }>(`/admin/players/${id}/arc/jobs/${jobId}`).then(
+      (r) => r.job,
+    );
+
+  /** The stored arc, or null when none has been composed yet. */
+  arc = (id: string) =>
+    this.call<{ arc: Arc; beat_order: number }>(`/admin/players/${id}/arc`).catch(
+      (e) => {
+        if (e instanceof ApiError && e.status === 404) return null;
+        throw e;
+      },
+    );
+
+  /** Save an edited arc. A 422 carries the reason it was refused. */
+  saveArc = (id: string, arc: Arc, restart = false) =>
+    this.call<{ arc: Arc }>(`/admin/players/${id}/arc`, {
+      method: "PUT",
+      body: JSON.stringify({ arc, restart }),
+    });
+
+  nearbyPlaces = (id: string, at: string) =>
+    this.call<{ places: Waypoint[] }>(
+      `/admin/players/${id}/places?at=${encodeURIComponent(at)}`,
+    ).then((r) => r.places);
 
   deletePlayer = (id: string) =>
     this.call<{ deleted: boolean; rows: number }>(`/admin/players/${id}`, {

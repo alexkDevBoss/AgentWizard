@@ -29,6 +29,11 @@ class EnvConfig:
     monthly_budget_usd: int
     creates_budget: bool
 
+    #: Outbound story messages per player per day. Six is the product rule;
+    #: dev raises it so a five-stop walk can be tested end to end in one
+    #: sitting without waiting for midnight.
+    max_messages_per_day: int
+
     # Data durability. dev is disposable; prod is not.
     retain_data: bool
     point_in_time_recovery: bool
@@ -50,6 +55,7 @@ ENVIRONMENTS: dict[str, EnvConfig] = {
         stack_name="AdventureAgentDev",
         monthly_budget_usd=50,
         creates_budget=True,
+        max_messages_per_day=200,
         retain_data=False,
         point_in_time_recovery=False,
         termination_protection=False,
@@ -60,6 +66,7 @@ ENVIRONMENTS: dict[str, EnvConfig] = {
         monthly_budget_usd=50,
         # The budget covers the whole account, so it is created once, by dev.
         creates_budget=False,
+        max_messages_per_day=6,
         retain_data=True,
         point_in_time_recovery=True,
         termination_protection=True,
