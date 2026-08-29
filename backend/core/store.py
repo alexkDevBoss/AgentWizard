@@ -29,6 +29,10 @@ from backend.core.models import Channel, Direction, EventKind, Player, PlayerSta
 # Daily counters are only interesting for a couple of days after the fact.
 QUOTA_TTL_DAYS = 3
 
+# A composed draft the operator never got round to saving is worth keeping
+# for a day, not forever.
+ARC_JOB_TTL_DAYS = 1
+
 # Long enough to outlive Telegram's retry window by a wide margin, short
 # enough that these rows never accumulate.
 UPDATE_TTL_DAYS = 2
@@ -290,6 +294,70 @@ def timeline(player_id: str, *, limit: int = 100, ascending: bool = True) -> lis
         Limit=limit,
     )
     return [_undecimal(i) for i in resp.get("Items", [])]
+
+
+# --------------------------------------------------------------- generated arcs
+
+
+def put_arc(player_id: str, arc_item: dict[str, Any]) -> None:
+    """Store the arc composed for this player.
+
+    A `days` arc is a file in the repo. A `stages` arc is built around where
+    the player actually is, so it exists only for them and lives here.
+    """
+    _table().put_item(
+        Item=_clean(
+            {
+                "pk": player_pk(player_id),
+                "sk": "ARC",
+                "composed_at": iso(now_utc()),
+                **arc_item,
+            }
+        )
+    )
+
+
+def get_arc(player_id: str) -> dict[str, Any] | None:
+    resp = _table().get_item(Key={"pk": player_pk(player_id), "sk": "ARC"})
+    item = resp.get("Item")
+    return _undecimal(item) if item else None
+
+
+def set_beat_order(player_id: str, order: int) -> None:
+    """Move the player to a stage. The only way the pointer ever moves."""
+    _table().update_item(
+        Key={"pk": player_pk(player_id), "sk": "PROFILE"},
+        UpdateExpression="SET beat_order = :n",
+        ExpressionAttributeValues={":n": int(order)},
+    )
+
+
+# ----------------------------------------------------------------- arc jobs
+#
+# Composing an arc takes 25-35 seconds -- longer than API Gateway will hold an
+# HTTP request open. So the console starts a job, a second Lambda does the
+# work, and these rows are how the two halves talk.
+
+
+def put_arc_job(player_id: str, job_id: str, **fields: Any) -> None:
+    _table().put_item(
+        Item=_clean(
+            {
+                "pk": player_pk(player_id),
+                "sk": f"ARCJOB#{job_id}",
+                "job_id": job_id,
+                "updated_at": iso(now_utc()),
+                "ttl": ttl_epoch(now_utc(), ARC_JOB_TTL_DAYS),
+                **fields,
+            }
+        )
+    )
+
+
+def get_arc_job(player_id: str, job_id: str) -> dict[str, Any] | None:
+    resp = _table().get_item(Key={"pk": player_pk(player_id), "sk": f"ARCJOB#{job_id}"})
+    item = resp.get("Item")
+    return _undecimal(item) if item else None
 
 
 # -------------------------------------------------------------------- beats

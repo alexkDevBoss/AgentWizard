@@ -18,8 +18,19 @@ REGION = "us-east-1"
 
 QUIET_HOURS_START = 22  # inclusive, player-local
 QUIET_HOURS_END = 8  # exclusive, player-local
-MAX_STORY_MESSAGES_PER_DAY = 6
 MAX_CALLS_PER_ARC = 1
+
+#: Outbound story messages per player per player-local day.
+#:
+#: Six is the product rule and the default, and prod does not override it. It
+#: is read from the environment because a one-day *walking* arc cannot live
+#: inside it: five stops need five arrivals plus the nudges between them, so a
+#: cap written for a seven-day story stops the walk halfway. Dev raises it to
+#: get through a whole route in one sitting.
+#:
+#: Raised, never removed. The ceiling is what stops a loop between the engine
+#: and a model from spending the month's budget in an afternoon.
+MAX_STORY_MESSAGES_PER_DAY = int(os.environ.get("ADVENTURE_MAX_MESSAGES_PER_DAY") or 6)
 
 # How often the out-of-character footer is appended to in-character
 # messages. The spec accepts a persistent footer OR an always-available
@@ -75,6 +86,24 @@ WRITE_TIMEOUT_S = 13.0
 WRITE_RETRIES = 0
 REVIEW_TIMEOUT_S = 5.0
 REVIEW_RETRIES = 1
+
+# Composing an arc is a much bigger piece of writing than a single reply, and
+# it happens at onboarding rather than inside the webhook -- so it is not
+# bound by API Gateway's 30s and can be given the room it needs. A customer
+# waiting on a progress bar will wait a minute; they will not wait for a
+# second attempt after a failure, so it retries.
+# Looking at a photograph. It runs inside the webhook alongside generation and
+# review, so its budget comes out of the same 30 seconds -- kept small, and
+# describing an image is a much shorter job than writing one.
+VISION_MAX_TOKENS = 700
+VISION_EFFORT = "low"
+VISION_TIMEOUT_S = 7.0
+VISION_RETRIES = 0
+
+ARCSMITH_MAX_TOKENS = 8000
+ARCSMITH_EFFORT = "high"
+ARCSMITH_TIMEOUT_S = 90.0
+ARCSMITH_RETRIES = 1
 
 # How much of the player's timeline is replayed to the model as conversation.
 # Enough for continuity, bounded so a long arc cannot grow the prompt without

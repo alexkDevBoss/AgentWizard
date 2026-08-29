@@ -138,7 +138,10 @@ def _handle_update(update: dict) -> None:
         return
 
     _record_inbound(player, described, command)
-    _dispatch_command(player, command, argument, described)
+    # Read straight off the update rather than out of `described`, which is
+    # what gets written to the timeline and must never carry a position. The
+    # engine compares these against a geofence and drops them.
+    _dispatch_command(player, command, argument, described, tg.extract_location(update))
 
 
 def _handle_unenrolled(chat_id: int, command: Command, argument: str | None) -> None:
@@ -222,11 +225,17 @@ def _enrol(chat_id: int, player_id: str, code: str) -> None:
 
 
 def _record_inbound(player: Player, described: dict, command: Command) -> None:
+    if described["has_location"]:
+        # The engine records this one itself, once it has compared the
+        # position against the fence -- an arrival is worth more on the
+        # timeline than "they sent a location", and two rows for one message
+        # would read as two arrivals.
+        store.touch_last_contact(player.player_id)
+        return
+
     kind = EventKind.MESSAGE
     if described["has_photo"]:
         kind = EventKind.PHOTO
-    elif described["has_location"]:
-        kind = EventKind.LOCATION
     elif command is not Command.NONE:
         kind = EventKind.COMMAND
 
@@ -254,7 +263,11 @@ def _record_inbound(player: Player, described: dict, command: Command) -> None:
 
 
 def _dispatch_command(
-    player: Player, command: Command, argument: str | None, described: dict
+    player: Player,
+    command: Command,
+    argument: str | None,
+    described: dict,
+    coordinates: tuple[float, float] | None = None,
 ) -> None:
     match command:
         case Command.STOP:
@@ -280,4 +293,4 @@ def _dispatch_command(
                 source="command",
             )
         case _:
-            engine.respond(player, described)
+            engine.respond(player, described, coordinates=coordinates)

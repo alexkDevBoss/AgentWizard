@@ -82,9 +82,13 @@ class Player:
     timezone: str = "UTC"
     status: PlayerStatus = PlayerStatus.PENDING
     arc_id: str | None = None
-    #: When the arc began, in UTC. The current beat is derived from this and
-    #: the player's timezone, so it is set once, at enrolment, and not moved.
+    #: When the arc began, in UTC. In a `days` arc the current beat is derived
+    #: from this and the player's timezone, so it is set once, at enrolment,
+    #: and not moved.
     arc_started_at: str | None = None
+    #: Which stage of a `stages` arc the player is on, 1-based. Unused by a
+    #: `days` arc, where the beat is arithmetic rather than a stored pointer.
+    beat_order: int = 1
     telegram_chat_id: int | None = None
     enrolment_code: str | None = None
     created_at: str = field(default_factory=lambda: iso(now_utc()))
@@ -117,6 +121,8 @@ class Player:
             kwargs["telegram_chat_id"] = int(kwargs["telegram_chat_id"])
         if "calls_placed" in kwargs:
             kwargs["calls_placed"] = int(kwargs["calls_placed"])
+        if "beat_order" in kwargs:
+            kwargs["beat_order"] = int(kwargs["beat_order"])
         kwargs["status"] = PlayerStatus(kwargs.get("status", PlayerStatus.PENDING))
         return cls(**kwargs)
 

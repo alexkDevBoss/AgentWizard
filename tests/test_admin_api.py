@@ -220,8 +220,13 @@ def test_the_player_list_is_ordered_by_most_recent_contact(
     _status, created = call("POST /admin/players", body={"display_name": "Stale One"})
     stale_id = created["player"]["player_id"]
 
-    # The fixture player makes contact after the other one was created.
-    store.touch_last_contact(player.player_id)
+    # Both timestamps are set explicitly rather than taken from the wall clock.
+    # Creating one player and then touching the other raced: on Windows the
+    # clock is coarse enough that both writes can land in the same microsecond,
+    # leaving the sort order undefined and the test failing about one run in
+    # five.
+    store.touch_last_contact(stale_id, at="2026-03-10T10:00:00.000000Z")
+    store.touch_last_contact(player.player_id, at="2026-03-10T11:00:00.000000Z")
 
     _status, body = call("GET /admin/players")
     order = [p["player_id"] for p in body["players"]]

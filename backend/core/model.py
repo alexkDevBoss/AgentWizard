@@ -130,21 +130,27 @@ def judge(
     tool: dict,
     max_tokens: int = config.REVIEW_MAX_TOKENS,
     effort: str = config.REVIEW_EFFORT,
+    timeout: float = config.REVIEW_TIMEOUT_S,
+    retries: int = config.REVIEW_RETRIES,
     purpose: str = "review",
 ) -> dict:
     """Get a structured answer by forcing one tool call. Returns its input.
 
     Forcing the tool is what makes the result parseable without defensive JSON
     handling -- the API guarantees the shape, so there is no branch here for
-    "the model replied in prose instead".
+    "the model replied in prose instead". It is also why this cannot think:
+    Bedrock rejects `thinking` alongside a forced `tool_choice`.
+
+    The budget is a parameter because the two callers live under very
+    different ceilings -- the safety review runs inside a webhook that must
+    answer in 30s, while composing an arc happens at onboarding and can take a
+    minute.
     """
     try:
         with logs.timed("model.judge", purpose=purpose, model=config.REVIEW_MODEL):
             response = (
                 client()
-                .with_options(
-                    timeout=config.REVIEW_TIMEOUT_S, max_retries=config.REVIEW_RETRIES
-                )
+                .with_options(timeout=timeout, max_retries=retries)
                 .messages.create(
                     model=config.REVIEW_MODEL,
                     max_tokens=max_tokens,

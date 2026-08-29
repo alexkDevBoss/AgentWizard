@@ -102,6 +102,24 @@ class TelegramClient:
     def get_file(self, file_id: str) -> dict:
         return self._call("getFile", file_id=file_id)
 
+    def download(self, file_id: str, *, max_bytes: int = 5_000_000) -> bytes:
+        """Fetch a photo's bytes. Two round trips: getFile, then the CDN.
+
+        Reads at most ``max_bytes``. The Bot API caps photos well below this,
+        so a larger response means something is wrong and reading it all would
+        only turn that into a memory problem inside a Lambda.
+        """
+        path = self.get_file(file_id).get("file_path")
+        if not path:
+            raise TelegramError("getFile", 0, f"no file_path for {file_id}")
+
+        request = urllib.request.Request(self.file_url(path), method="GET")
+        with (
+            logs.timed("telegram.download", file_id=file_id),
+            urllib.request.urlopen(request, timeout=self._timeout) as resp,
+        ):
+            return resp.read(max_bytes)
+
     def file_url(self, file_path: str) -> str:
         return f"{API_ROOT}/file/bot{self._token}/{file_path}"
 
@@ -137,6 +155,22 @@ class TelegramClient:
 def extract_message(update: dict) -> dict | None:
     """Pull the message out of an update, whether new or edited."""
     return update.get("message") or update.get("edited_message")
+
+
+def extract_location(update: dict) -> tuple[float, float] | None:
+    """The raw coordinates from a location update, or None.
+
+    Deliberately separate from :func:`describe_update`. That function's result
+    is what gets written to the timeline, and it must never carry a position --
+    so the coordinates are reachable only by asking for them explicitly, by a
+    caller that intends to compare them against a geofence and drop them.
+    """
+    message = extract_message(update) or {}
+    location = message.get("location") or {}
+    lat, lon = location.get("latitude"), location.get("longitude")
+    if lat is None or lon is None:
+        return None
+    return float(lat), float(lon)
 
 
 def describe_update(update: dict) -> dict[str, Any]:
